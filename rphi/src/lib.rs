@@ -31,7 +31,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-mod lanuage_model;
+mod language_model;
 mod model;
 mod raw;
 mod source;
@@ -63,18 +63,19 @@ enum Task {
     Infer {
         settings: InferenceSettings,
         sender: tokio::sync::mpsc::UnboundedSender<String>,
-        sampler: Arc<Mutex<dyn Sampler<u32, f32>>>,
+        sampler: Arc<Mutex<dyn Sampler>>,
     },
     RunSync {
-        callback: Box<
-            dyn for<'a> FnOnce(
-                    &'a mut PhiModel,
-                )
-                    -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>
-                + Send,
-        >,
+        callback: SyncCallback,
     },
 }
+
+type SyncCallback = Box<
+    dyn for<'a> FnOnce(
+            &'a mut PhiModel,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>
+        + Send,
+>;
 
 /// A quantized Phi-1.5 language model with support for streaming generation.
 pub struct Phi {
@@ -153,7 +154,7 @@ impl Phi {
     fn run(
         &mut self,
         settings: InferenceSettings,
-        sampler: Arc<Mutex<dyn Sampler<u32, f32>>>,
+        sampler: Arc<Mutex<dyn Sampler>>,
     ) -> anyhow::Result<tokio::sync::mpsc::UnboundedReceiver<String>> {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         self.task_sender

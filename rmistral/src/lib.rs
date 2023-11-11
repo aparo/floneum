@@ -58,18 +58,19 @@ enum Task {
     Infer {
         settings: InferenceSettings,
         sender: tokio::sync::mpsc::UnboundedSender<String>,
-        sampler: Arc<Mutex<dyn Sampler<u32, f32>>>,
+        sampler: Arc<Mutex<dyn Sampler>>,
     },
     RunSync {
-        callback: Box<
-            dyn for<'a> FnOnce(
-                    &'a mut MistralModel,
-                )
-                    -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>
-                + Send,
-        >,
+        callback: SyncCallback,
     },
 }
+
+type SyncCallback = Box<
+    dyn for<'a> FnOnce(
+            &'a mut MistralModel,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>
+        + Send,
+>;
 
 /// A quantized Mistral language model with support for streaming generation.
 pub struct Mistral {
@@ -148,7 +149,7 @@ impl Mistral {
     fn run(
         &mut self,
         settings: InferenceSettings,
-        sampler: Arc<Mutex<dyn Sampler<u32, f32>>>,
+        sampler: Arc<Mutex<dyn Sampler>>,
     ) -> anyhow::Result<tokio::sync::mpsc::UnboundedReceiver<String>> {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         self.task_sender

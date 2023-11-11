@@ -1,4 +1,5 @@
 # Floneum
+# [Download the latest releate](https://github.com/floneum/floneum/releases/tag/v0.2.0)
 
 Floneum is a graph editor for AI workflows with a focus on community-made plugins, local AI and safety.
 

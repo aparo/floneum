@@ -1,13 +1,16 @@
 use crate::embedding::{Embedding, VectorSpace};
+use crate::structured::generate_structured;
 use crate::UnknownVectorSpace;
 use futures_util::{Stream, StreamExt};
-use kalosm_sample::Tokenizer;
-use llm_samplers::prelude::Sampler;
+use kalosm_sample::{Parser, Tokenizer};
+use llm_samplers::configure::SamplerChainBuilder;
+use llm_samplers::prelude::*;
 use llm_samplers::types::Logits;
 use std::any::Any;
-use std::future::Future;
+use std::fmt::Display;
 use std::future::IntoFuture;
 use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -379,7 +382,7 @@ pub trait ModelExt: Model + Send + 'static {
     ///     let tokenizer = llm.tokenizer();
     ///     // Start a sync task on the model
     ///     llm.run_sync(move |llm: &mut Phi::SyncModel| {
-    ///         async move {
+    ///         Box::pin(async move {
     ///             let question = "What is 10 + 10?";
     ///
     ///             // Create a new session of the model
@@ -389,44 +392,107 @@ pub trait ModelExt: Model + Send + 'static {
     ///             let mut logits = llm.feed_text(&mut session, question).unwrap();
     ///
     ///             println!("logits: {:?}", logits);
-    ///         }
+    ///         })
     ///     })
     ///     .await
     ///     .unwrap();
     /// }
     /// ```
-    async fn run_sync<F: std::future::Future<Output = ()>>(
+    async fn run_sync(
         &mut self,
-        f: impl for<'a> AsyncFnOnce<&'a mut Self::SyncModel, Output = ()> + Send + 'static,
+        f: impl for<'a> FnOnce(
+                &'a mut Self::SyncModel,
+            ) -> Pin<Box<dyn std::future::Future<Output = ()> + 'a>>
+            + Send
+            + 'static,
     ) -> anyhow::Result<()> {
-        self.run_sync_raw(Box::new(|llm| Box::pin(async move { f.call(llm).await })))
-            .await
+        self.run_sync_raw(Box::new(f)).await
+    }
+
+    /// Generate structured text with the given prompt.
+    async fn stream_structured_text_with_sampler<P>(
+        &mut self,
+        prompt: &str,
+        parser: P,
+        parser_state: P::PartialState,
+        sampler: Arc<Mutex<dyn Sampler>>,
+    ) -> anyhow::Result<StructureParserResult<Self::TextStream, P::Output>>
+    where
+        Self::TextStream: From<tokio::sync::mpsc::UnboundedReceiver<String>>,
+        P: Parser + Send + 'static,
+        P::PartialState: Send + 'static,
+        P::Output: Send + 'static,
+    {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (result_sender, result_receiver) = tokio::sync::oneshot::channel();
+
+        let prompt = prompt.to_string();
+        self.run_sync(move |llm: &mut Self::SyncModel| {
+            let mut session = llm.new_session().unwrap();
+            Box::pin(async move {
+                let result = llm.generate_structured(
+                    &mut session,
+                    prompt,
+                    parser,
+                    parser_state,
+                    sampler,
+                    |token| Ok(sender.send(token)?),
+                );
+                match result_sender.send(result) {
+                    Ok(()) => {}
+                    Err(Ok(_)) => {
+                        log::error!("Error generating structured text: cancelled");
+                    }
+                    Err(Err(err)) => {
+                        log::error!("Error generating structured text: {:?}", err);
+                    }
+                }
+            })
+        })
+        .await?;
+
+        Ok(StructureParserResult::new(
+            Self::TextStream::from(receiver),
+            result_receiver,
+        ))
     }
 }
 
-/// A trait for a function that can be called asynchronously.
-///
-/// This is automatically implemented for any closure that implements [`FnOnce`] and returns a [`Future`] with the correct output.
-pub trait AsyncFnOnce<T> {
-    /// The future type that this function returns.
-    type Fut: Future<Output = Self::Output>;
-    /// The output type that this function returns.
-    type Output;
-
-    /// Call the function.
-    fn call(self, arg: T) -> Self::Fut;
+/// The result of a structured parser stream.
+pub struct StructureParserResult<S: Stream<Item = String> + Send + Unpin + 'static, O> {
+    stream: S,
+    result: tokio::sync::oneshot::Receiver<anyhow::Result<O>>,
 }
 
-impl<F, Fut, T> AsyncFnOnce<T> for F
-where
-    F: FnOnce(T) -> Fut,
-    Fut: Future,
-{
-    type Fut = Fut;
-    type Output = Fut::Output;
+impl<S: Stream<Item = String> + Send + Unpin + 'static, O> Deref for StructureParserResult<S, O> {
+    type Target = S;
 
-    fn call(self, arg: T) -> Fut {
-        (self)(arg)
+    fn deref(&self) -> &Self::Target {
+        &self.stream
+    }
+}
+
+impl<S: Stream<Item = String> + Send + Unpin + 'static, O> DerefMut
+    for StructureParserResult<S, O>
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.stream
+    }
+}
+
+impl<S: Stream<Item = String> + Send + Unpin + 'static, O> StructureParserResult<S, O> {
+    fn new(stream: S, result: tokio::sync::oneshot::Receiver<anyhow::Result<O>>) -> Self {
+        Self { stream, result }
+    }
+
+    /// Get the final result of the structured parser.
+    pub async fn result(self) -> anyhow::Result<O> {
+        self.result.await.unwrap()
+    }
+
+    /// Split the stream into a token stream and a result.
+    pub fn split(self) -> (S, tokio::sync::oneshot::Receiver<anyhow::Result<O>>) {
+        (self.stream, self.result)
     }
 }
 
@@ -445,7 +511,7 @@ impl<M: Model + Send + 'static> ModelExt for M {}
 ///     let tokenizer = llm.tokenizer();
 ///     // Start a sync task on the model
 ///     llm.run_sync(move |llm: &mut Phi::SyncModel| {
-///         async move {
+///         Box::pin(async move {
 ///             let question = "What is 10 + 10?";
 ///
 ///             // Create a new session of the model
@@ -455,7 +521,7 @@ impl<M: Model + Send + 'static> ModelExt for M {}
 ///             let mut logits = llm.feed_text(&mut session, question).unwrap();
 ///
 ///             println!("logits: {:?}", logits);
-///         }
+///         })
 ///     })
 ///     .await
 ///     .unwrap();
@@ -469,15 +535,48 @@ pub trait SyncModel {
     fn new_session(&self) -> anyhow::Result<Self::Session>;
 
     /// Run the model synchronously.
-    fn feed_text(
+    fn feed_text(&mut self, session: &mut Self::Session, prompt: &str) -> anyhow::Result<Logits>;
+
+    /// Run the model synchronously with a pre-tokenized input.
+    fn feed_tokens(
         &mut self,
         session: &mut Self::Session,
-        prompt: &str,
-    ) -> anyhow::Result<Logits<u32, f32>>;
+        tokens: &[u32],
+    ) -> anyhow::Result<Logits>;
 
     /// Get the token ID that represents the end of a sequence.
     fn stop_token(&self) -> anyhow::Result<u32>;
+
+    /// Return the tokenizer associated with this model.
+    fn tokenizer(&self) -> Arc<dyn Tokenizer + Send + Sync>;
 }
+
+/// An extension trait for sync models.
+pub trait SyncModelExt: SyncModel {
+    /// Generate new text with the given prompt that conforms to the given parser.
+    fn generate_structured<P: Parser>(
+        &mut self,
+        session: &mut Self::Session,
+        prompt: impl Display,
+        parser: P,
+        parser_state: P::PartialState,
+        sampler: Arc<Mutex<dyn Sampler>>,
+        on_token: impl FnMut(String) -> anyhow::Result<()>,
+    ) -> anyhow::Result<P::Output> {
+        generate_structured(
+            prompt,
+            self,
+            session,
+            &self.tokenizer(),
+            parser,
+            parser_state,
+            sampler,
+            on_token,
+        )
+    }
+}
+
+impl<M: SyncModel> SyncModelExt for M {}
 
 /// A marker type for models that do not support synchronous generation.
 pub struct SyncModelNotSupported;
@@ -489,12 +588,20 @@ impl SyncModel for SyncModelNotSupported {
         Err(anyhow::Error::msg("Not implemented"))
     }
 
-    fn feed_text(&mut self, _session: &mut (), _prompt: &str) -> anyhow::Result<Logits<u32, f32>> {
+    fn feed_text(&mut self, _session: &mut (), _prompt: &str) -> anyhow::Result<Logits> {
+        Err(anyhow::Error::msg("Not implemented"))
+    }
+
+    fn feed_tokens(&mut self, _session: &mut (), _tokens: &[u32]) -> anyhow::Result<Logits> {
         Err(anyhow::Error::msg("Not implemented"))
     }
 
     fn stop_token(&self) -> anyhow::Result<u32> {
         Err(anyhow::Error::msg("Not implemented"))
+    }
+
+    fn tokenizer(&self) -> Arc<dyn Tokenizer + Send + Sync> {
+        unimplemented!()
     }
 }
 
@@ -534,7 +641,7 @@ pub trait Model: Send + 'static {
         prompt: &str,
         max_tokens: Option<u32>,
         stop_on: Option<&str>,
-        sampler: Arc<Mutex<dyn Sampler<u32, f32>>>,
+        sampler: Arc<Mutex<dyn Sampler>>,
     ) -> anyhow::Result<String> {
         let mut text = String::new();
 
@@ -570,7 +677,7 @@ pub trait Model: Send + 'static {
         _prompt: &str,
         _max_tokens: Option<u32>,
         _stop_on: Option<&str>,
-        _sampler: Arc<Mutex<dyn Sampler<u32, f32>>>,
+        _sampler: Arc<Mutex<dyn Sampler>>,
     ) -> anyhow::Result<Self::TextStream> {
         Err(anyhow::Error::msg("Not implemented"))
     }
@@ -638,18 +745,28 @@ impl SyncModel for BoxedSyncModel {
         self_ref.new_session()
     }
 
-    fn feed_text(
-        &mut self,
-        session: &mut Self::Session,
-        prompt: &str,
-    ) -> anyhow::Result<Logits<u32, f32>> {
+    fn feed_text(&mut self, session: &mut Self::Session, prompt: &str) -> anyhow::Result<Logits> {
         let self_ref: &mut (dyn SyncModel<Session = Box<dyn Any>>) = self.as_mut();
         self_ref.feed_text(session, prompt)
+    }
+
+    fn feed_tokens(
+        &mut self,
+        session: &mut Self::Session,
+        tokens: &[u32],
+    ) -> anyhow::Result<Logits> {
+        let self_ref: &mut (dyn SyncModel<Session = Box<dyn Any>>) = self.as_mut();
+        self_ref.feed_tokens(session, tokens)
     }
 
     fn stop_token(&self) -> anyhow::Result<u32> {
         let self_ref: &(dyn SyncModel<Session = Box<dyn Any>>) = self.as_ref();
         self_ref.stop_token()
+    }
+
+    fn tokenizer(&self) -> Arc<dyn Tokenizer + Send + Sync> {
+        let self_ref: &(dyn SyncModel<Session = Box<dyn Any>>) = self.as_ref();
+        self_ref.tokenizer()
     }
 }
 
@@ -662,11 +779,7 @@ impl<M: SyncModel<Session = S>, S: Any> SyncModel for AnySyncModel<M, S> {
         self.0.new_session().map(|s| Box::new(s) as Box<dyn Any>)
     }
 
-    fn feed_text(
-        &mut self,
-        session: &mut Self::Session,
-        prompt: &str,
-    ) -> anyhow::Result<Logits<u32, f32>> {
+    fn feed_text(&mut self, session: &mut Self::Session, prompt: &str) -> anyhow::Result<Logits> {
         self.0.feed_text(
             match session.downcast_mut() {
                 Some(s) => s,
@@ -681,8 +794,31 @@ impl<M: SyncModel<Session = S>, S: Any> SyncModel for AnySyncModel<M, S> {
         )
     }
 
+    fn feed_tokens(
+        &mut self,
+        session: &mut Self::Session,
+        tokens: &[u32],
+    ) -> anyhow::Result<Logits> {
+        self.0.feed_tokens(
+            match session.downcast_mut() {
+                Some(s) => s,
+                None => {
+                    return Err(anyhow::Error::msg(format!(
+                        "Invalid session type expected {:?}",
+                        std::any::type_name::<S>()
+                    )))
+                }
+            },
+            tokens,
+        )
+    }
+
     fn stop_token(&self) -> anyhow::Result<u32> {
         self.0.stop_token()
+    }
+
+    fn tokenizer(&self) -> Arc<dyn Tokenizer + Send + Sync> {
+        self.0.tokenizer()
     }
 }
 
@@ -720,7 +856,7 @@ where
         prompt: &str,
         max_tokens: Option<u32>,
         stop_on: Option<&str>,
-        sampler: Arc<Mutex<dyn Sampler<u32, f32>>>,
+        sampler: Arc<Mutex<dyn Sampler>>,
     ) -> anyhow::Result<Self::TextStream> {
         self.0
             .stream_text_with_sampler(prompt, max_tokens, stop_on, sampler)
@@ -757,7 +893,101 @@ impl Default for GenerationParameters {
     }
 }
 
-impl GenerationParameters {
+impl crate::model::GenerationParameters {
+    /// Create a sampler chain from the generation parameters.
+    pub fn sampler(self) -> SamplerChain {
+        use llm_samplers::configure::SamplerSlot;
+        let GenerationParameters {
+            temperature,
+            tau,
+            eta,
+            mu,
+            repetition_penalty,
+            repetition_penalty_range,
+            max_length: _,
+            stop_on: _,
+        } = self;
+        SamplerChainBuilder::from([
+            (
+                "repetition",
+                SamplerSlot::new_static(move || {
+                    Box::new(
+                        SampleRepetition::default()
+                            .penalty(repetition_penalty)
+                            .last_n(repetition_penalty_range as usize),
+                    )
+                }),
+            ),
+            (
+                "freqpresence",
+                SamplerSlot::new_static(move || Box::new(SampleFreqPresence::default().last_n(64))),
+            ),
+            (
+                "seqrepetition",
+                SamplerSlot::new_static(move || Box::<SampleSeqRepetition>::default()),
+            ),
+            (
+                "temperature",
+                SamplerSlot::new_static(move || {
+                    Box::new(SampleTemperature::default().temperature(temperature))
+                }),
+            ),
+            (
+                "mirostat2",
+                SamplerSlot::new_static(move || {
+                    Box::new(SampleMirostat2::default().tau(tau).eta(eta).mu(mu))
+                }),
+            ),
+        ])
+        .into_chain()
+    }
+
+    /// Get the mirostat2 sampler from the generation parameters.
+    pub fn mirostat2_sampler(self) -> SampleMirostat2 {
+        SampleMirostat2::default()
+            .tau(self.tau)
+            .eta(self.eta)
+            .mu(self.mu)
+    }
+
+    /// Create a sampler chain from the generation parameters without removing any tokens. This can be useful in combination with [`ModelExt::stream_structured_text_with_sampler`] which may pick unlikely tokens.
+    pub fn bias_only_sampler(self) -> SamplerChain {
+        use llm_samplers::configure::SamplerSlot;
+        let GenerationParameters {
+            temperature,
+            repetition_penalty,
+            repetition_penalty_range,
+            ..
+        } = self;
+        SamplerChainBuilder::from([
+            (
+                "repetition",
+                SamplerSlot::new_static(move || {
+                    Box::new(
+                        SampleRepetition::default()
+                            .penalty(repetition_penalty)
+                            .last_n(repetition_penalty_range as usize),
+                    )
+                }),
+            ),
+            (
+                "freqpresence",
+                SamplerSlot::new_static(move || Box::new(SampleFreqPresence::default().last_n(64))),
+            ),
+            (
+                "seqrepetition",
+                SamplerSlot::new_static(move || Box::<SampleSeqRepetition>::default()),
+            ),
+            (
+                "temperature",
+                SamplerSlot::new_static(move || {
+                    Box::new(SampleTemperature::default().temperature(temperature))
+                }),
+            ),
+        ])
+        .into_chain()
+    }
+
     /// Set the temperature to use when generating text.
     pub fn with_temperature(mut self, temperature: f32) -> Self {
         self.temperature = temperature;

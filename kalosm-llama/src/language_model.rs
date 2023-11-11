@@ -1,27 +1,26 @@
-use crate::model::PhiModel;
-use crate::InferenceSettings;
-pub use crate::Phi;
-use crate::Task;
-use kalosm_language_model::*;
+use std::sync::{Arc, Mutex};
+
+pub use crate::Llama;
+use crate::LlamaModel;
+use crate::{InferenceSettings, Task};
+use kalosm_language_model::{CreateModel, GenerationParameters, Model, VectorSpace};
 use kalosm_streams::ChannelTextStream;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 #[async_trait::async_trait]
-impl CreateModel for Phi {
+impl CreateModel for Llama {
     async fn start() -> Self {
-        Phi::default()
+        Llama::default()
     }
 
     fn requires_download() -> bool {
-        !Phi::downloaded()
+        !Llama::downloaded()
     }
 }
 
 #[async_trait::async_trait]
-impl Model for Phi {
+impl Model for Llama {
     type TextStream = ChannelTextStream<String>;
-    type SyncModel = PhiModel;
+    type SyncModel = LlamaModel;
 
     fn tokenizer(&self) -> Arc<dyn kalosm_sample::Tokenizer + Send + Sync> {
         self.get_tokenizer() as Arc<dyn kalosm_sample::Tokenizer + Send + Sync>
@@ -63,7 +62,7 @@ impl Model for Phi {
         prompt: &str,
         max_tokens: Option<u32>,
         stop_on: Option<&str>,
-        sampler: Arc<Mutex<dyn llm_samplers::prelude::Sampler<u32, f32>>>,
+        sampler: Arc<Mutex<dyn llm_samplers::prelude::Sampler>>,
     ) -> anyhow::Result<Self::TextStream> {
         let max_length = max_tokens.unwrap_or(64);
         self.run(
@@ -76,6 +75,6 @@ impl Model for Phi {
     }
 }
 
-pub struct PhiSpace;
+pub struct LlamaSpace;
 
-impl VectorSpace for PhiSpace {}
+impl VectorSpace for LlamaSpace {}
