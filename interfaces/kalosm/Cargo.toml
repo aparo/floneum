@@ -1,0 +1,28 @@
+[package]
+name = "kalosm"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+kalosm-language = { default-features = false, workspace = true }
+kalosm-sound.workspace = true
+kalosm-vision.workspace = true
+kalosm-streams.workspace = true
+llm-samplers.workspace = true
+tokio = { version = "1.32.0", features = ["full"] }
+futures-util = "0.3.28"
+anyhow = "1.0.75"
+rand = "0.8.5"
+image = "0.24.7"
+tracing = "0.1.40"
+
+[dev-dependencies]
+tracing-subscriber = "0.2"
+
+[features]
+default = ["llamacpp"]
+llamacpp = ["kalosm-language/llamacpp"]
+metal = ["kalosm-language/metal"]
+cublas = ["kalosm-language/cublas"]

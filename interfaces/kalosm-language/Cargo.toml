@@ -1,0 +1,68 @@
+[package]
+name = "kalosm-language"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytesize = "1.2.0"
+futures-util = "0.3.28"
+llm-samplers = { workspace = true }
+log = "0.4.17"
+rand = "0.8.5"
+reqwest = { version = "0.11.18", features = ["stream", "json"] }
+spinoff = "0.7.0"
+tokio = { version = "1.28.1", features = ["full"] }
+slab = { version = "0.4.8", features = ["serde"] }
+instant-distance = { version = "0.6.0", features = ["with-serde"] }
+serde = { version = "1.0.163", features = ["derive"] }
+partial_sort = "0.2.0"
+once_cell = "1.18.0"
+pollster = "0.3.0"
+url = "2.4.0"
+anyhow = "1.0.71"
+tracing = "0.1.37"
+num_cpus = "1.16.0"
+async-trait = "0.1.73"
+serde_json = "1.0.107"
+chrono = "0.4.31"
+readability = { version = "0.2.0", default_features = false }
+tantivy = "0.21.0"
+tempfile = "3.8.0"
+rss = { version = "2.0.6", features = ["atom"] }
+scraper = { version = "0.18.0", features = ["atomic"] }
+kalosm-language-model = { workspace = true }
+headless_chrome = { version = "1.0" }
+candle-core.workspace = true
+candle-nn.workspace = true
+tokio-util = { version = "0.7.9", features = ["rt"] }
+crossbeam = "0.8.2"
+dashmap = "5.5.3"
+rbert.workspace = true
+rphi.workspace = true
+rmistral.workspace = true
+kalosm-llama.workspace = true
+pin-project = "1"
+kalosm-streams.workspace = true
+pulldown-cmark = "0.9.3"
+docx-rs = "0.4.7"
+pdf = { git = "https://github.com/pdf-rs/pdf" }
+pdf_text = { git = "https://github.com/pdf-rs/pdf_text" }
+convert_case = "0.6.0"
+itertools = "0.11.0"
+async-recursion = "1.0.5"
+tokenizers = { version = "0.13.4" }
+rustc-hash = "1.1.0"
+kalosm-sample = { workspace = true }
+ego-tree = "0.6.2"
+image = "0.24.7"
+meval = "0.2.0"
+whatlang = "0.16.3"
+texting_robots = "0.2.2"
+half = "2.3.1"
+
+[features]
+llamacpp = ["kalosm-language-model/llamacpp", "kalosm-sample/llamacpp"]
+metal = ["kalosm-language-model/metal", "rphi/accelerate", "rbert/accelerate", "rmistral/accelerate", "kalosm-llama/accelerate"]
+cublas = ["kalosm-language-model/cublas", "rbert/cuda", "rbert/cudnn", "rphi/cuda", "rphi/cudnn", "rmistral/cuda", "rmistral/cudnn", "kalosm-llama/cuda", "kalosm-llama/cudnn"]
