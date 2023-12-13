@@ -254,7 +254,7 @@ impl MHA {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         mask: Option<&Tensor>,
         cache: Option<&mut ParallelBlockCache>,
@@ -344,7 +344,7 @@ impl ParallelBlock {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         mask: Option<&Tensor>,
         cache: Option<&mut ParallelBlockCache>,
@@ -384,7 +384,7 @@ impl MixFormerSequentialForCausalLM {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor, mut cache: Option<&mut PhiCache>) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor, mut cache: Option<&mut PhiCache>) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embedding)?;
@@ -399,7 +399,7 @@ impl MixFormerSequentialForCausalLM {
             }
             _ => Some(get_mask(seq_len, xs.device())?),
         };
-        for (i, block) in self.blocks.iter_mut().enumerate() {
+        for (i, block) in self.blocks.iter().enumerate() {
             xs = block.forward(&xs, mask.as_ref(), cache.as_mut().map(|c| &mut c.blocks[i]))?;
         }
         xs.narrow(1, seq_len - 1, 1)?.apply(&self.head)?.squeeze(1)
@@ -410,7 +410,7 @@ impl MixFormerSequentialForCausalLM {
 #[derive(Debug, Clone)]
 pub struct PhiCache {
     first_token: bool,
-    blocks: Vec<ParallelBlockCache>,
+    pub(crate) blocks: Vec<ParallelBlockCache>,
 }
 
 impl PhiCache {
@@ -498,10 +498,10 @@ impl PhiCache {
 }
 
 #[derive(Debug, Clone)]
-struct ParallelBlockCache(Option<ParallelBlockCacheValue>);
+pub(crate) struct ParallelBlockCache(pub(crate) Option<ParallelBlockCacheValue>);
 
 #[derive(Debug, Clone)]
-struct ParallelBlockCacheValue {
-    key: Tensor,
+pub(crate) struct ParallelBlockCacheValue {
+    pub(crate) key: Tensor,
     value: Tensor,
 }

@@ -39,6 +39,7 @@ mod session;
 mod source;
 
 use crate::raw::Model;
+pub use crate::session::LlamaSession;
 use kalosm_language_model::ChatModel;
 use llm_samplers::types::Sampler;
 use session::LlamaCache;
@@ -54,6 +55,7 @@ use tokenizers::Tokenizer;
 
 /// A prelude of commonly used items in RPhi.
 pub mod prelude {
+    pub use crate::session::LlamaSession;
     pub use crate::{Llama, LlamaBuilder, LlamaSource};
     pub use kalosm_language_model::*;
 }
@@ -128,7 +130,7 @@ impl Llama {
     /// Create a default chat model.
     pub fn new_chat() -> Self {
         Llama::builder()
-            .with_source(LlamaSource::zephyr_7b_beta())
+            .with_source(LlamaSource::open_chat_7b())
             .build()
             .unwrap()
     }
@@ -194,7 +196,7 @@ impl Llama {
     }
 
     fn run(
-        &mut self,
+        &self,
         settings: InferenceSettings,
         sampler: Arc<Mutex<dyn Sampler>>,
     ) -> anyhow::Result<tokio::sync::mpsc::UnboundedReceiver<String>> {
@@ -244,7 +246,7 @@ impl LlamaBuilder {
     pub fn build(self) -> anyhow::Result<Llama> {
         let tokenizer = self.source.tokenizer()?;
 
-        let device = Device::Cpu;
+        let device = Device::cuda_if_available(0)?;
         let filename = self.source.model()?;
         let mut file = std::fs::File::open(&filename)?;
         let model = match filename.extension().and_then(|v| v.to_str()) {

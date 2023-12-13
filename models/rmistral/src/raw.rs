@@ -176,7 +176,7 @@ impl Attention {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
@@ -274,7 +274,7 @@ impl DecoderLayer {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
@@ -356,7 +356,7 @@ impl Model {
     }
 
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offset: usize,
         mut cache: Option<&mut MistralCache>,
@@ -374,7 +374,7 @@ impl Model {
             _ => Some(self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?),
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             xs = layer.forward(
                 &xs,
                 attention_mask.as_ref(),
@@ -392,7 +392,7 @@ impl Model {
 #[derive(Debug, Clone)]
 pub struct MistralCache {
     first_token: bool,
-    blocks: Vec<AttentionCache>,
+    pub(crate) blocks: Vec<AttentionCache>,
 }
 
 impl MistralCache {
@@ -474,10 +474,10 @@ impl MistralCache {
 }
 
 #[derive(Debug, Clone)]
-struct AttentionCache(Option<AttentionCacheValue>);
+pub(crate) struct AttentionCache(pub(crate) Option<AttentionCacheValue>);
 
 #[derive(Debug, Clone)]
-struct AttentionCacheValue {
-    key: Tensor,
+pub(crate) struct AttentionCacheValue {
+    pub(crate) key: Tensor,
     value: Tensor,
 }

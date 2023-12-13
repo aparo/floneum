@@ -8,7 +8,7 @@ use std::fmt::{Debug, Formatter};
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Tensor};
-use kalosm_language_model::{SyncModel, SyncModelExt};
+use kalosm_language_model::{Session, SyncModel, SyncModelExt};
 use tokenizers::Tokenizer;
 
 use crate::InferenceSettings;
@@ -19,10 +19,36 @@ pub struct MistralSession {
     current_tokens: Vec<u32>,
 }
 
+impl Session for MistralSession {
+    fn save_to(&self, path: impl AsRef<std::path::Path>) -> anyhow::Result<()> {
+        let tensors = self.get_tensor_map();
+        Ok(candle_core::safetensors::save(&tensors, path)?)
+    }
+
+    fn load_from(path: impl AsRef<std::path::Path>) -> anyhow::Result<Self>
+    where
+        Self: std::marker::Sized,
+    {
+        let device = Device::cuda_if_available(0)?;
+        let tensors = candle_core::safetensors::load(path, &device)?;
+
+        Ok(Self::from_tensor_map(tensors))
+    }
+}
+
 impl MistralSession {
     /// Export the current cache tensor map.
     pub fn get_tensor_map(&self) -> HashMap<String, Tensor> {
-        self.cache.get_tensor_map()
+        let mut map = self.cache.get_tensor_map();
+        map.insert(
+            "current_tokens".to_string(),
+            Tensor::from_iter(
+                self.current_tokens.iter().copied(),
+                self.cache.blocks[0].0.as_ref().unwrap().key.device(),
+            )
+            .unwrap(),
+        );
+        map
     }
 
     /// Import a cache tensor map.
@@ -31,7 +57,8 @@ impl MistralSession {
     }
 
     /// Create a cache from a tensor map. This can be used to load a cache from disk.
-    pub fn from_tensor_map(map: HashMap<String, Tensor>, current_tokens: Vec<u32>) -> Self {
+    pub fn from_tensor_map(map: HashMap<String, Tensor>) -> Self {
+        let current_tokens = map.get("current_tokens").unwrap().to_vec1().unwrap();
         Self {
             cache: MistralCache::from_tensor_map(map),
             current_tokens,
@@ -64,22 +91,18 @@ impl SyncModel for MistralModel {
         })
     }
 
-    fn feed_text(&mut self, session: &mut Self::Session, prompt: &str) -> anyhow::Result<Logits> {
+    fn feed_text(&self, session: &mut Self::Session, prompt: &str) -> anyhow::Result<Logits> {
         let encoded = self.tokenizer.encode(prompt, true).map_err(E::msg)?;
         let tokens = encoded.get_ids();
         self.feed_tokens(session, tokens)
     }
 
-    fn feed_tokens(
-        &mut self,
-        session: &mut Self::Session,
-        tokens: &[u32],
-    ) -> anyhow::Result<Logits> {
+    fn feed_tokens(&self, session: &mut Self::Session, tokens: &[u32]) -> anyhow::Result<Logits> {
         session.current_tokens.extend(tokens);
 
         let token_count = tokens.len();
         Self::forward(
-            &mut self.model,
+            &self.model,
             &self.device,
             tokens,
             session.current_tokens.len() - token_count,
@@ -104,7 +127,7 @@ impl SyncModel for MistralModel {
 
 impl MistralModel {
     fn forward(
-        model: &mut Model,
+        model: &Model,
         device: &Device,
         tokens: &[u32],
         seqlen_offset: usize,
@@ -141,7 +164,7 @@ impl MistralModel {
     }
 
     pub(crate) fn _infer(
-        &mut self,
+        &self,
         settings: InferenceSettings,
         sampler: std::sync::Arc<std::sync::Mutex<dyn llm_samplers::prelude::Sampler>>,
         out: tokio::sync::mpsc::UnboundedSender<String>,

@@ -123,7 +123,27 @@ impl LlamaSource {
             markers: ChatMarkers {
                 system_prompt_marker: Some("<s>[INST] "),
                 end_system_marker: Some(" [/INST]"),
-                user_marker: Some("<|user|>"),
+                user_marker: Some("[INST] "),
+                end_user_marker: Some(" [/INST]"),
+                assistant_marker: Some(""),
+                end_assistant_marker: Some("</s>"),
+            },
+        }
+    }
+
+    /// A preset for Mistral7bInstruct v0.2
+    pub fn mistral_7b_instruct_2() -> Self {
+        Self {
+            model_id: "TheBloke/Mistral-7B-Instruct-v0.2-GGUF".to_string(),
+            revision: "main".to_string(),
+            gguf_file: "mistral-7b-instruct-v0.2.Q4_K_M.gguf".into(),
+            tokenizer_repo: "mistralai/Mistral-7B-v0.1".to_string(),
+            tokenizer_file: "tokenizer.json".to_string(),
+            group_query_attention: 8,
+            markers: ChatMarkers {
+                system_prompt_marker: Some("<s>[INST] "),
+                end_system_marker: Some(" [/INST]"),
+                user_marker: Some("[INST] "),
                 end_user_marker: Some(" [/INST]"),
                 assistant_marker: Some(""),
                 end_assistant_marker: Some("</s>"),
@@ -178,6 +198,26 @@ impl LlamaSource {
             revision: "main".to_string(),
             gguf_file: "openchat_3.5.Q4_K_M.gguf".into(),
             tokenizer_repo: "openchat/openchat_3.5".to_string(),
+            tokenizer_file: "tokenizer.json".to_string(),
+            group_query_attention: 8,
+            markers: ChatMarkers {
+                system_prompt_marker: Some(""),
+                end_system_marker: Some("<|end_of_turn|>"),
+                user_marker: Some("GPT4 Correct User: "),
+                end_user_marker: Some("<|end_of_turn|>"),
+                assistant_marker: Some("GPT4 Correct Assistant: "),
+                end_assistant_marker: Some("<|end_of_turn|>"),
+            },
+        }
+    }
+
+    /// A preset for Starling 7b Alpha
+    pub fn starling_7b_alpha() -> Self {
+        Self {
+            model_id: "TheBloke/Starling-LM-7B-alpha-GGUF".to_string(),
+            revision: "main".to_string(),
+            gguf_file: "starling-lm-7b-alpha.Q4_K_M.gguf".into(),
+            tokenizer_repo: "berkeley-nest/Starling-LM-7B-alpha".to_string(),
             tokenizer_file: "tokenizer.json".to_string(),
             group_query_attention: 8,
             markers: ChatMarkers {

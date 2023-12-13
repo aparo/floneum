@@ -12,6 +12,7 @@ use std::fmt::Display;
 use std::future::IntoFuture;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -116,12 +117,12 @@ pub trait CreateModel {
 
 /// A builder for the [`ModelExt::stream_text`] method.
 pub struct StreamTextBuilder<'a, M: Model> {
-    self_: &'a mut M,
+    self_: &'a M,
     prompt: &'a str,
     parameters: GenerationParameters,
     #[allow(clippy::type_complexity)]
     future: fn(
-        &'a mut M,
+        &'a M,
         &'a str,
         GenerationParameters,
     ) -> Pin<
@@ -134,9 +135,9 @@ impl<'a, M: Model> StreamTextBuilder<'a, M> {
     #[allow(clippy::type_complexity)]
     pub fn new(
         prompt: &'a str,
-        self_: &'a mut M,
+        self_: &'a M,
         future: fn(
-            &'a mut M,
+            &'a M,
             &'a str,
             GenerationParameters,
         ) -> Pin<
@@ -224,11 +225,11 @@ impl<'a, M: Model> IntoFuture for StreamTextBuilder<'a, M> {
 /// A builder for the [`ModelExt::generate_text`] method.
 #[allow(clippy::type_complexity)]
 pub struct GenerateTextBuilder<'a, M: Model> {
-    self_: &'a mut M,
+    self_: &'a M,
     prompt: &'a str,
     parameters: GenerationParameters,
     future: fn(
-        &'a mut M,
+        &'a M,
         &'a str,
         GenerationParameters,
     )
@@ -240,9 +241,9 @@ impl<'a, M: Model> GenerateTextBuilder<'a, M> {
     #[allow(clippy::type_complexity)]
     pub fn new(
         prompt: &'a str,
-        self_: &'a mut M,
+        self_: &'a M,
         future: fn(
-            &'a mut M,
+            &'a M,
             &'a str,
             GenerationParameters,
         ) -> Pin<
@@ -329,7 +330,7 @@ impl<'a, M: Model> IntoFuture for GenerateTextBuilder<'a, M> {
 
 /// An extension trait for models.
 #[async_trait::async_trait]
-pub trait ModelExt: Model + Send + 'static {
+pub trait ModelExt: Model + Send + Sync + 'static {
     /// Generate text with the given prompt. This function generates a builder with extra parameters that can be set. To execute the builder, just call `await` on it.
     ///
     /// ```rust, no_run
@@ -345,7 +346,7 @@ pub trait ModelExt: Model + Send + 'static {
     ///     println!("{prompt}{result}");
     /// }
     /// ```
-    fn generate_text<'a>(&'a mut self, prompt: &'a str) -> GenerateTextBuilder<'a, Self>
+    fn generate_text<'a>(&'a self, prompt: &'a str) -> GenerateTextBuilder<'a, Self>
     where
         Self: Sized,
     {
@@ -377,7 +378,7 @@ pub trait ModelExt: Model + Send + 'static {
     ///     }
     /// }
     /// ```
-    fn stream_text<'a>(&'a mut self, prompt: &'a str) -> StreamTextBuilder<'a, Self>
+    fn stream_text<'a>(&'a self, prompt: &'a str) -> StreamTextBuilder<'a, Self>
     where
         Self: Sized,
     {
@@ -416,7 +417,7 @@ pub trait ModelExt: Model + Send + 'static {
     /// }
     /// ```
     fn run_sync(
-        &mut self,
+        &self,
         f: impl for<'a> FnOnce(
                 &'a mut Self::SyncModel,
             ) -> Pin<Box<dyn std::future::Future<Output = ()> + 'a>>
@@ -427,8 +428,26 @@ pub trait ModelExt: Model + Send + 'static {
     }
 
     /// Generate structured text with the given prompt.
+    async fn stream_structured_text<P>(
+        &self,
+        prompt: &str,
+        parser: P,
+    ) -> anyhow::Result<StructureParserResult<Self::TextStream, P::Output>>
+    where
+        Self::TextStream: From<tokio::sync::mpsc::UnboundedReceiver<String>>,
+        P: kalosm_sample::CreateParserState + Parser + Send + 'static,
+        P::PartialState: Send + 'static,
+        P::Output: Send + 'static,
+    {
+        let sampler = Arc::new(Mutex::new(GenerationParameters::default().sampler()));
+        let parser_state = parser.create_parser_state();
+        self.stream_structured_text_with_sampler(prompt, parser, parser_state, sampler)
+            .await
+    }
+
+    /// Generate structured text with the given prompt and sampler.
     async fn stream_structured_text_with_sampler<P>(
-        &mut self,
+        &self,
         prompt: &str,
         parser: P,
         parser_state: P::PartialState,
@@ -512,7 +531,7 @@ impl<S: Stream<Item = String> + Send + Unpin + 'static, O> StructureParserResult
     }
 }
 
-impl<M: Model + Send + 'static> ModelExt for M {}
+impl<M: Model + Send + Sync + 'static> ModelExt for M {}
 
 /// A raw interface for a model that can be used to generate text synchronously. This provides a very low level interface to a model's session:
 ///
@@ -545,20 +564,16 @@ impl<M: Model + Send + 'static> ModelExt for M {}
 /// ```
 pub trait SyncModel {
     /// The session type for this model.
-    type Session;
+    type Session: Session;
 
     /// Create a new session for this model.
     fn new_session(&self) -> anyhow::Result<Self::Session>;
 
     /// Run the model synchronously.
-    fn feed_text(&mut self, session: &mut Self::Session, prompt: &str) -> anyhow::Result<Logits>;
+    fn feed_text(&self, session: &mut Self::Session, prompt: &str) -> anyhow::Result<Logits>;
 
     /// Run the model synchronously with a pre-tokenized input.
-    fn feed_tokens(
-        &mut self,
-        session: &mut Self::Session,
-        tokens: &[u32],
-    ) -> anyhow::Result<Logits>;
+    fn feed_tokens(&self, session: &mut Self::Session, tokens: &[u32]) -> anyhow::Result<Logits>;
 
     /// Get the token ID that represents the end of a sequence.
     fn stop_token(&self) -> anyhow::Result<u32>;
@@ -567,11 +582,37 @@ pub trait SyncModel {
     fn tokenizer(&self) -> Arc<dyn Tokenizer + Send + Sync>;
 }
 
+/// A session for a model.
+pub trait Session {
+    /// Save the session to the given path.
+    fn save_to(&self, _path: impl AsRef<Path>) -> anyhow::Result<()> {
+        Err(anyhow::Error::msg("Not implemented"))
+    }
+
+    /// Load the session from the given path.
+    fn load_from(_path: impl AsRef<Path>) -> anyhow::Result<Self>
+    where
+        Self: std::marker::Sized,
+    {
+        Err(anyhow::Error::msg("Not implemented"))
+    }
+}
+
+impl Session for () {
+    fn save_to(&self, _path: impl AsRef<Path>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn load_from(_path: impl AsRef<Path>) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
 /// An extension trait for sync models.
 pub trait SyncModelExt: SyncModel {
     /// Generate new text with the given prompt that conforms to the given parser.
     fn generate_structured<P: Parser>(
-        &mut self,
+        &self,
         session: &mut Self::Session,
         prompt: impl Display,
         parser: P,
@@ -594,7 +635,7 @@ pub trait SyncModelExt: SyncModel {
     #[allow(clippy::too_many_arguments)]
     /// Stream text, calling the on_token callback every time a new token is generated. For some models, this could be used to implement [`Model::stream_text_with_sampler`].
     fn stream_text_with_sampler(
-        &mut self,
+        &self,
         session: &mut Self::Session,
         prompt: &str,
         max_tokens: Option<u32>,
@@ -616,13 +657,12 @@ pub trait SyncModelExt: SyncModel {
                 if let Some(stop_on) = stop_on {
                     text_matching_buffer.push_str(&new_text);
                     // Check if the string matches the stop_on string
-                    if let Some(position) = text_matching_buffer.find(stop_on) {
+                    if text_matching_buffer.contains(stop_on) {
                         // If it does, only send the text up and including the stop_on string
-                        new_text = text_matching_buffer
-                            .split_at(position + stop_on.len())
-                            .0
-                            .to_string();
-                        on_token(new_text)?;
+                        if new_text.len() > stop_on.len() {
+                            new_text = new_text.strip_suffix(stop_on).unwrap().to_string();
+                            on_token(new_text)?;
+                        }
                         // And stop the generation
                         break;
                     }
@@ -672,11 +712,11 @@ impl SyncModel for SyncModelNotSupported {
         Err(anyhow::Error::msg("Not implemented"))
     }
 
-    fn feed_text(&mut self, _session: &mut (), _prompt: &str) -> anyhow::Result<Logits> {
+    fn feed_text(&self, _session: &mut (), _prompt: &str) -> anyhow::Result<Logits> {
         Err(anyhow::Error::msg("Not implemented"))
     }
 
-    fn feed_tokens(&mut self, _session: &mut (), _tokens: &[u32]) -> anyhow::Result<Logits> {
+    fn feed_tokens(&self, _session: &mut (), _tokens: &[u32]) -> anyhow::Result<Logits> {
         Err(anyhow::Error::msg("Not implemented"))
     }
 
@@ -693,9 +733,9 @@ impl SyncModel for SyncModelNotSupported {
 ///
 /// The model may support using a custom sampler. If a specific model does not support a specific method, it will return an error.
 #[async_trait::async_trait]
-pub trait Model: Send + 'static {
+pub trait Model: Send + Sync + 'static {
     /// The type of stream that this model generates.
-    type TextStream: Stream<Item = String> + Send + Unpin + 'static;
+    type TextStream: Stream<Item = String> + Send + Sync + Unpin + 'static;
 
     /// Get the tokenizer associated with this model to use for constrained generation.
     fn tokenizer(&self) -> Arc<dyn Tokenizer + Send + Sync>;
@@ -708,7 +748,7 @@ pub trait Model: Send + 'static {
     ///
     /// See [`ModelExt::run_sync`] for nicer API with an example.
     fn run_sync_raw(
-        &mut self,
+        &self,
         _f: Box<
             dyn for<'a> FnOnce(
                     &'a mut Self::SyncModel,
@@ -722,7 +762,7 @@ pub trait Model: Send + 'static {
 
     /// Generate text with the given prompt.
     async fn generate_text_with_sampler(
-        &mut self,
+        &self,
         prompt: &str,
         max_tokens: Option<u32>,
         stop_on: Option<&str>,
@@ -743,7 +783,7 @@ pub trait Model: Send + 'static {
     ///
     /// See [`ModelExt::generate_text`] for nicer API with an example.
     async fn generate_text_inner(
-        &mut self,
+        &self,
         prompt: &str,
         parameters: GenerationParameters,
     ) -> anyhow::Result<String> {
@@ -758,7 +798,7 @@ pub trait Model: Send + 'static {
 
     /// Generate text with the given prompt.
     async fn stream_text_with_sampler(
-        &mut self,
+        &self,
         _prompt: &str,
         _max_tokens: Option<u32>,
         _stop_on: Option<&str>,
@@ -771,7 +811,7 @@ pub trait Model: Send + 'static {
     ///
     /// See [`ModelExt::stream_text`] for nicer API with an example.
     async fn stream_text_inner(
-        &mut self,
+        &self,
         prompt: &str,
         parameters: GenerationParameters,
     ) -> anyhow::Result<Self::TextStream>;
@@ -779,7 +819,7 @@ pub trait Model: Send + 'static {
     /// Convert this model into a model trait object.
     fn into_any_model(self) -> DynModel
     where
-        Self: Send + Sized,
+        Self: Send + Sync + Sized,
     {
         Box::new(AnyModel(self, PhantomData))
     }
@@ -804,85 +844,117 @@ pub trait ChatModel: Model {
 /// A trait object for a model.
 pub type DynModel = Box<
     dyn Model<
-            TextStream = Box<dyn Stream<Item = String> + Send + Unpin>,
+            TextStream = Box<dyn Stream<Item = String> + Send + Sync + Unpin>,
             SyncModel = BoxedSyncModel,
         > + Send,
 >;
 
 #[async_trait::async_trait]
 impl Model for DynModel {
-    type TextStream = Box<dyn Stream<Item = String> + Send + Unpin>;
+    type TextStream = Box<dyn Stream<Item = String> + Send + Sync + Unpin>;
     type SyncModel = BoxedSyncModel;
 
     fn tokenizer(&self) -> Arc<dyn Tokenizer + Send + Sync> {
         let self_ref: &(dyn Model<
-            TextStream = Box<dyn Stream<Item = String> + Send + Unpin>,
+            TextStream = Box<dyn Stream<Item = String> + Send + Sync + Unpin>,
             SyncModel = BoxedSyncModel,
         > + Send) = self.as_ref();
         self_ref.tokenizer()
     }
 
     async fn stream_text_inner(
-        &mut self,
+        &self,
         prompt: &str,
         parameters: GenerationParameters,
     ) -> anyhow::Result<Self::TextStream> {
-        let self_ref: &mut (dyn Model<
-            TextStream = Box<dyn Stream<Item = String> + Send + Unpin>,
+        let self_ref: &(dyn Model<
+            TextStream = Box<dyn Stream<Item = String> + Send + Sync + Unpin>,
             SyncModel = BoxedSyncModel,
-        > + Send) = self.as_mut();
+        > + Send) = self.as_ref();
         self_ref.stream_text_inner(prompt, parameters).await
     }
 }
 
 /// A trait object for a sync model.
-pub type BoxedSyncModel = Box<dyn SyncModel<Session = Box<dyn Any>>>;
+pub type BoxedSyncModel = Box<dyn SyncModel<Session = AnySession>>;
+
+trait AnySessionTrait {
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn save_to(&self, path: &Path) -> anyhow::Result<()>;
+}
+
+impl<S: Any + Session> AnySessionTrait for S {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn save_to(&self, path: &Path) -> anyhow::Result<()> {
+        Session::save_to(self, path)
+    }
+}
+
+/// A type-erased session.
+///
+/// > Note: boxed sessions do not support loading from a path.
+pub struct AnySession {
+    session: Box<dyn AnySessionTrait>,
+}
+
+impl AnySession {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self.session.as_any_mut()
+    }
+}
+
+impl Session for AnySession {
+    fn save_to(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+        self.session.save_to(path.as_ref())
+    }
+}
 
 impl SyncModel for BoxedSyncModel {
-    type Session = Box<dyn Any>;
+    type Session = AnySession;
 
     fn new_session(&self) -> anyhow::Result<Self::Session> {
-        let self_ref: &(dyn SyncModel<Session = Box<dyn Any>>) = self.as_ref();
+        let self_ref: &(dyn SyncModel<Session = AnySession>) = self.as_ref();
         self_ref.new_session()
     }
 
-    fn feed_text(&mut self, session: &mut Self::Session, prompt: &str) -> anyhow::Result<Logits> {
-        let self_ref: &mut (dyn SyncModel<Session = Box<dyn Any>>) = self.as_mut();
+    fn feed_text(&self, session: &mut Self::Session, prompt: &str) -> anyhow::Result<Logits> {
+        let self_ref: &(dyn SyncModel<Session = AnySession>) = self.as_ref();
         self_ref.feed_text(session, prompt)
     }
 
-    fn feed_tokens(
-        &mut self,
-        session: &mut Self::Session,
-        tokens: &[u32],
-    ) -> anyhow::Result<Logits> {
-        let self_ref: &mut (dyn SyncModel<Session = Box<dyn Any>>) = self.as_mut();
+    fn feed_tokens(&self, session: &mut Self::Session, tokens: &[u32]) -> anyhow::Result<Logits> {
+        let self_ref: &(dyn SyncModel<Session = AnySession>) = self.as_ref();
         self_ref.feed_tokens(session, tokens)
     }
 
     fn stop_token(&self) -> anyhow::Result<u32> {
-        let self_ref: &(dyn SyncModel<Session = Box<dyn Any>>) = self.as_ref();
+        let self_ref: &(dyn SyncModel<Session = AnySession>) = self.as_ref();
         self_ref.stop_token()
     }
 
     fn tokenizer(&self) -> Arc<dyn Tokenizer + Send + Sync> {
-        let self_ref: &(dyn SyncModel<Session = Box<dyn Any>>) = self.as_ref();
+        let self_ref: &(dyn SyncModel<Session = AnySession>) = self.as_ref();
         self_ref.tokenizer()
     }
 }
 
 struct AnySyncModel<M: SyncModel<Session = S>, S: Any>(M, PhantomData<S>);
 
-impl<M: SyncModel<Session = S>, S: Any> SyncModel for AnySyncModel<M, S> {
-    type Session = Box<dyn Any>;
+impl<M: SyncModel<Session = S>, S: Session + Any> SyncModel for AnySyncModel<M, S> {
+    type Session = AnySession;
 
     fn new_session(&self) -> anyhow::Result<Self::Session> {
-        self.0.new_session().map(|s| Box::new(s) as Box<dyn Any>)
+        self.0.new_session().map(|s| AnySession {
+            session: Box::new(s),
+        })
     }
 
-    fn feed_text(&mut self, session: &mut Self::Session, prompt: &str) -> anyhow::Result<Logits> {
+    fn feed_text(&self, session: &mut Self::Session, prompt: &str) -> anyhow::Result<Logits> {
         self.0.feed_text(
-            match session.downcast_mut() {
+            match session.as_any_mut().downcast_mut() {
                 Some(s) => s,
                 None => {
                     return Err(anyhow::Error::msg(format!(
@@ -895,13 +967,9 @@ impl<M: SyncModel<Session = S>, S: Any> SyncModel for AnySyncModel<M, S> {
         )
     }
 
-    fn feed_tokens(
-        &mut self,
-        session: &mut Self::Session,
-        tokens: &[u32],
-    ) -> anyhow::Result<Logits> {
+    fn feed_tokens(&self, session: &mut Self::Session, tokens: &[u32]) -> anyhow::Result<Logits> {
         self.0.feed_tokens(
-            match session.downcast_mut() {
+            match session.as_any_mut().downcast_mut() {
                 Some(s) => s,
                 None => {
                     return Err(anyhow::Error::msg(format!(
@@ -923,7 +991,7 @@ impl<M: SyncModel<Session = S>, S: Any> SyncModel for AnySyncModel<M, S> {
     }
 }
 
-struct AnyModel<M: Model<TextStream = S> + Send, S: Stream<Item = String> + Send + Unpin + 'static>(
+struct AnyModel<M: Model<TextStream = S>, S: Stream<Item = String> + Send + Sync + Unpin + 'static>(
     M,
     PhantomData<S>,
 );
@@ -931,10 +999,10 @@ struct AnyModel<M: Model<TextStream = S> + Send, S: Stream<Item = String> + Send
 #[async_trait::async_trait]
 impl<M, S> Model for AnyModel<M, S>
 where
-    S: Stream<Item = String> + Send + Unpin + 'static,
-    M: Model<TextStream = S> + Send,
+    S: Stream<Item = String> + Send + Sync + Unpin + 'static,
+    M: Model<TextStream = S> + Send + Sync,
 {
-    type TextStream = Box<dyn Stream<Item = String> + Send + Unpin>;
+    type TextStream = Box<dyn Stream<Item = String> + Send + Sync + Unpin>;
     type SyncModel = BoxedSyncModel;
 
     fn tokenizer(&self) -> Arc<dyn Tokenizer + Send + Sync> {
@@ -942,18 +1010,18 @@ where
     }
 
     async fn stream_text_inner(
-        &mut self,
+        &self,
         prompt: &str,
         params: GenerationParameters,
     ) -> anyhow::Result<Self::TextStream> {
         self.0
             .stream_text_inner(prompt, params)
             .await
-            .map(|s| Box::new(s) as Box<dyn Stream<Item = String> + Send + Unpin>)
+            .map(|s| Box::new(s) as Box<dyn Stream<Item = String> + Send + Sync + Unpin>)
     }
 
     async fn stream_text_with_sampler(
-        &mut self,
+        &self,
         prompt: &str,
         max_tokens: Option<u32>,
         stop_on: Option<&str>,
@@ -962,7 +1030,7 @@ where
         self.0
             .stream_text_with_sampler(prompt, max_tokens, stop_on, sampler)
             .await
-            .map(|s| Box::new(s) as Box<dyn Stream<Item = String> + Send + Unpin>)
+            .map(|s| Box::new(s) as Box<dyn Stream<Item = String> + Send + Sync + Unpin>)
     }
 }
 
