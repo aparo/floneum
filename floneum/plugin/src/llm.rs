@@ -1,7 +1,5 @@
 use crate::host::State;
-use crate::llm::kalosm_sample::StructuredSampler;
 use crate::plugins::main;
-use kalosm::language::Model as _;
 
 use crate::plugins::main::types::{Embedding, EmbeddingModel, Model, Structure};
 
@@ -203,7 +201,10 @@ impl main::types::HostModel for State {
                 }
             },
             main::types::ModelType::Phi => Phi::builder().build()?.into_any_model(),
-            main::types::ModelType::Mistral => Mistral::builder().build()?.into_any_model(),
+            main::types::ModelType::Mistral => Llama::builder()
+                .with_source(LlamaSource::mistral_7b())
+                .build()?
+                .into_any_model(),
         };
         let idx = self.models.insert(model);
 
@@ -251,7 +252,7 @@ impl main::types::HostModel for State {
                 }
             },
             main::types::ModelType::Phi => !Phi::requires_download(),
-            main::types::ModelType::Mistral => !Mistral::requires_download(),
+            main::types::ModelType::Mistral => !Llama::requires_download(),
         })
     }
 

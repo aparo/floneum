@@ -5,6 +5,9 @@ use candle_core::quantized::QTensor;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Module};
+use rayon::iter::ParallelIterator;
+use rayon::slice::ParallelSliceMut;
+use tracing::Span;
 
 use crate::session::{AttentionCache, AttentionCacheValue, LlamaCache};
 
@@ -79,19 +82,9 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 impl LayerWeights {
-    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
-        let _enter = self.span_rot.enter();
+    fn apply_rotary_emb(span_rot: &Span, cos: &Tensor, sin: &Tensor, x: &Tensor) -> Result<Tensor> {
+        let _enter = span_rot.enter();
         let (b_sz, n_head, seq_len, n_embd) = x.dims4()?;
-        let cos = self
-            .cos
-            .narrow(0, index_pos, seq_len)?
-            .reshape((seq_len, n_embd / 2, 1))?;
-        let sin = self
-            .sin
-            .narrow(0, index_pos, seq_len)?
-            .reshape((seq_len, n_embd / 2, 1))?;
-        let cos = cos.broadcast_as((b_sz, 1, seq_len, n_embd / 2, 1))?;
-        let sin = sin.broadcast_as((b_sz, 1, seq_len, n_embd / 2, 1))?;
         // This mimics the llama.cpp behavior.
         // https://github.com/ggerganov/llama.cpp/blob/1f0bccb27929e261744c979bc75114955da49e98/ggml.c#L12104-L12105
         // The x0 and x1 value are interleaved on the n_embd (= head_dim) dimension.
@@ -101,8 +94,8 @@ impl LayerWeights {
         let x = x.reshape((b_sz, n_head, seq_len, n_embd / 2, 2))?;
         let x0 = x.narrow(D::Minus1, 0, 1)?;
         let x1 = x.narrow(D::Minus1, 1, 1)?;
-        let y0 = (x0.broadcast_mul(&cos)? - x1.broadcast_mul(&sin)?)?;
-        let y1 = (x0.broadcast_mul(&sin)? + x1.broadcast_mul(&cos)?)?;
+        let y0 = (x0.broadcast_mul(cos)? - x1.broadcast_mul(sin)?)?;
+        let y1 = (x0.broadcast_mul(sin)? + x1.broadcast_mul(cos)?)?;
         let rope = Tensor::cat(&[y0, y1], D::Minus1)?;
         let rope = rope.flatten_from(D::Minus2)?;
         Ok(rope)
@@ -117,22 +110,50 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let q = self.attention_wq.forward(x)?;
-        let k = self.attention_wk.forward(x)?;
-        let v = self.attention_wv.forward(x)?;
 
-        let q = q
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?;
-        let k = k
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+        let cos =
+            self.cos
+                .narrow(0, index_pos, seq_len)?
+                .reshape((seq_len, self.head_dim / 2, 1))?;
+        let sin =
+            self.sin
+                .narrow(0, index_pos, seq_len)?
+                .reshape((seq_len, self.head_dim / 2, 1))?;
+        let cos = cos.broadcast_as((b_sz, 1, seq_len, self.head_dim / 2, 1))?;
+        let sin = sin.broadcast_as((b_sz, 1, seq_len, self.head_dim / 2, 1))?;
 
-        let q = self.apply_rotary_emb(&q, index_pos)?;
-        let k = self.apply_rotary_emb(&k, index_pos)?;
+        let (q, k, v) = std::thread::scope(|scope| {
+            let v_task = scope.spawn(|| {
+                let v = self.attention_wv.forward(x)?;
+                v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                    .transpose(1, 2)
+            });
+
+            let q_task = scope.spawn(|| {
+                let q = self.attention_wq.forward(x)?;
+                let q = q
+                    .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+                    .transpose(1, 2)?;
+                Self::apply_rotary_emb(&self.span_rot, &cos, &sin, &q)
+            });
+            let k = {
+                let k = self.attention_wk.forward(x)?;
+                let k = k
+                    .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                    .transpose(1, 2)?;
+                Self::apply_rotary_emb(&self.span_rot, &cos, &sin, &k)?
+            };
+
+            Ok::<_, candle_core::Error>((
+                q_task
+                    .join()
+                    .map_err(|_| candle_core::Error::Msg("Failed to join thread".to_string()))??,
+                k,
+                v_task
+                    .join()
+                    .map_err(|_| candle_core::Error::Msg("Failed to join thread".to_string()))??,
+            ))
+        })?;
 
         let (k, v) = match cache {
             None => (k, v),
@@ -169,7 +190,6 @@ impl LayerWeights {
         let mask = mask.broadcast_as(att.shape())?;
         let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.forward(&y)?;
@@ -369,7 +389,7 @@ impl Model {
             let masks = self.masks.read().unwrap();
             masks.get(&t).cloned()
         } {
-            Ok(mask.clone())
+            Ok(mask)
         } else {
             let mask: Vec<_> = (0..t)
                 .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
@@ -383,14 +403,36 @@ impl Model {
 
     pub fn forward(
         &self,
-        x: &Tensor,
+        tokens: &[u32],
+        device: &Device,
         index_pos: usize,
         mut cache: Option<&mut LlamaCache>,
     ) -> Result<Tensor> {
-        let (_b_sz, seq_len) = x.dims2()?;
+        let seq_len = tokens.len();
+        let cached_tokens = cache.as_ref().map(|c| c.tokens.len()).unwrap_or_default();
+        // We use a lower cutoff than the context length to avoid recomputing the attention every single token
+        const CUTOFF_LEN: usize = MAX_SEQ_LEN - 32;
+        let (x, index_pos) = if seq_len + cached_tokens > CUTOFF_LEN {
+            let all_tokens = if let Some(cache) = cache.as_mut() {
+                cache.clear();
+                let mut all_tokens = cache.tokens.clone();
+                all_tokens.extend(tokens);
+                all_tokens
+            } else {
+                tokens.to_vec()
+            };
+            let all_tokens = &all_tokens[all_tokens.len() - CUTOFF_LEN..];
+            assert!(all_tokens.len() <= MAX_SEQ_LEN);
+            (Tensor::new(all_tokens, device)?.unsqueeze(0)?, 0)
+        } else {
+            (Tensor::new(tokens, device)?.unsqueeze(0)?, index_pos)
+        };
+        if let Some(cache) = cache.as_mut() {
+            cache.tokens.extend_from_slice(tokens);
+        }
         let mask = self.mask(seq_len)?;
         let _enter = self.span.enter();
-        let mut layer_in = self.tok_embeddings.forward(x)?;
+        let mut layer_in = self.tok_embeddings.forward(&x)?;
         for (i, layer) in self.layers.iter().enumerate() {
             let x = layer_in;
             let residual = &x;
@@ -407,12 +449,58 @@ impl Model {
             let _enter = layer.span_mlp.enter();
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
-            let w1 = layer.feed_forward_w1.forward(&x)?;
-            let w3 = layer.feed_forward_w3.forward(&x)?;
-            let mlp = layer
-                .feed_forward_w2
-                .forward(&(candle_nn::ops::silu(&w1)? * w3)?)?;
-            layer_in = (mlp + residual)?;
+
+            layer_in = std::thread::scope(|scope| {
+                let w1 = scope.spawn(|| {
+                    let w1 = layer.feed_forward_w1.forward(&x)?;
+                    let shape = w1.shape();
+                    let mut as_vec = w1.flatten_all()?.to_vec1::<f32>()?;
+
+                    static SILU_CACHE: once_cell::sync::Lazy<Vec<f32>> =
+                        once_cell::sync::Lazy::new(|| {
+                            let f16_count = 2 << 16;
+                            let mut cache = Vec::with_capacity(f16_count);
+                            for i in 0..f16_count {
+                                let x = half::f16::from_bits(i as u16).to_f32();
+                                cache.push(x / (1. + (-x).exp()));
+                            }
+                            cache
+                        });
+
+                    #[inline(always)]
+                    fn silu_chunk(chunk: &mut [f32; 128]) {
+                        let cache: &[f32] = SILU_CACHE.as_ref();
+                        for entry in chunk {
+                            let as_f16 = half::f16::from_f32(*entry);
+                            let as_f16 = as_f16.to_bits();
+                            let as_f16 = as_f16 as usize;
+                            *entry = cache[as_f16];
+                        }
+                    }
+
+                    // SILU
+                    let cache: &[f32] = SILU_CACHE.as_ref();
+                    let mut iter = as_vec.par_chunks_exact_mut(128);
+                    for entry in iter.remainder() {
+                        *entry = cache[half::f16::from_f32(*entry).to_bits() as usize];
+                    }
+                    iter.for_each(|chunk| {
+                        let chunk: &mut [f32; 128] = unsafe { chunk.try_into().unwrap_unchecked() };
+                        silu_chunk(chunk)
+                    });
+
+                    Tensor::from_vec(as_vec, shape, &Device::Cpu)
+                });
+
+                let w3 = layer.feed_forward_w3.forward(&x)?;
+                let w1 = w1
+                    .join()
+                    .map_err(|_| candle_core::Error::Msg("Failed to join thread".to_string()))??;
+
+                let mlp = layer.feed_forward_w2.forward(&(&w1 * w3)?)?;
+
+                mlp + residual
+            })?;
         }
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;

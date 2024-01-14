@@ -6,8 +6,6 @@ authors = ["Evan Almloff <evanalmloff@gmail.com>"]
 license = "MIT/Apache-2.0"
 repository = "https://github.com/floneum/floneum"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 
 [patch.crates-io]
@@ -21,7 +19,6 @@ members = [
     "models/kalosm-llama",
     "models/rphi",
     "models/rwhisper",
-    "models/rmistral",
     "models/rwuerstchen",
     "models/segment-anything-rs",
     "models/kalosm-ocr",
@@ -85,7 +82,7 @@ members = [
 [workspace.dependencies]
 candle-core = { version = "0.3.1" }
 candle-nn = { version = "0.3.1" }
-candle-transformers = { version = "0.3.1" }
+candle-transformers = { version = "=0.3.2" }
 kalosm = { path = "./interfaces/kalosm", version = "0.1.0" }
 kalosm-sample = { path = "./interfaces/kalosm-sample", version = "0.1.0" }
 kalosm-language-model = { path = "./interfaces/language-model", version = "0.1.0" }
@@ -97,7 +94,6 @@ kalosm-learning = { path = "./interfaces/kalosm-learning", version = "0.1.0" }
 kalosm-learning-macro = { path = "./interfaces/kalosm-learning-macro", version = "0.1.0" }
 rphi = { path = "./models/rphi", version = "0.1.0" }
 rbert = { path = "./models/rbert", version = "0.1.0" }
-rmistral = { path = "./models/rmistral", version = "0.1.0" }
 kalosm-llama = { path = "./models/kalosm-llama", version = "0.1.0" }
 rwhisper = { path = "./models/rwhisper", version = "0.1.0" }
 rwuerstchen = { path = "./models/rwuerstchen", version = "0.1.0" }
@@ -105,18 +101,14 @@ segment-anything-rs = { path = "./models/segment-anything-rs", version = "0.1.0"
 kalosm-ocr = { path = "./models/kalosm-ocr", version = "0.1.0" }
 llm-samplers = "=0.0.7"
 
-# The profile that 'cargo dist' will build with
 [profile.dist]
 inherits = "release"
 lto = "thin"
 
 [profile.release]
 lto = true
-# panic = "abort"
 opt-level = 3
-# opt-level = 'z'
-# strip = true
-debug = true
+debug = false
 codegen-units = 1
 
 [profile.dev.package."*"]

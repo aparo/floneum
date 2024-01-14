@@ -1,22 +1,22 @@
-use kalosm::{language::*, *};
+use kalosm::language::*;
 
 #[tokio::main]
 async fn main() {
+    let description = prompt_input("What is your character like? ").unwrap();
+    let character_name = prompt_input("What is your character's name? ").unwrap();
     let character_description =
-        "The assistant will respond like a cute cat named Kittens. The assistant will never reveal that it is an AI or assistant.";
-    let character_name = "Kittens";
+        format!("{description} The assistant will never reveal that it is an AI or assistant.");
 
-    let mut model = Llama::new_chat();
-    let constraints = LiteralParser::new(format!("(Responding as {}) ", character_name))
-        .then(StopOn::new(model.end_assistant_marker().to_string()));
+    let mut model = Llama::builder()
+        .with_source(LlamaSource::mistral_7b_instruct_2())
+        .build()
+        .unwrap();
+    let constraints = LiteralParser::new(format!("(Responding as {}) ", character_name)).then(
+        StopOn::new(model.chat_markers().unwrap().end_assistant_marker),
+    );
     let mut chat = Chat::builder(&mut model)
         .with_system_prompt(character_description)
         .constrain_response(move |_, _| constraints.clone())
-        .map_bot_response(move |response, _| {
-            response
-                .trim_start_matches(&format!("(Responding as {}) ", character_name))
-                .trim()
-        })
         .build();
 
     loop {

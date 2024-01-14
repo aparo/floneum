@@ -1,3 +1,5 @@
+//! Tools that can be used by [`kalosm_language_model::Model`]'s to perform actions.
+
 mod search;
 use std::{
     any::Any,
@@ -14,8 +16,6 @@ use kalosm_sample::{
 pub use search::*;
 mod calculator;
 pub use calculator::*;
-mod document;
-pub use document::*;
 
 /// A tool that can be used by a [`kalosm_language_model::Model`]
 // TODO: Add example

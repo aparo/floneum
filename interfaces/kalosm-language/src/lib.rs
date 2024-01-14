@@ -18,17 +18,31 @@
 //! - [`FuzzySearchIndex`]: A search index that performs in memory fuzzy search
 //! - [`DocumentDatabase`]: A search index that performs in memory vector based search
 
-mod context;
-pub use context::*;
-mod index;
-pub use index::*;
-mod tool;
-pub use tool::*;
-mod vector_db;
-pub use kalosm_language_model::*;
-pub use kalosm_llama::{Llama, LlamaBuilder, LlamaSession, LlamaSource};
-pub use kalosm_sample::*;
-pub use rbert::{Bert, BertBuilder, BertSource, BertSpace};
-pub use rmistral::{Mistral, MistralBuilder, MistralSource};
-pub use rphi::{Phi, PhiBuilder, PhiSource};
-pub use vector_db::*;
+pub mod chat;
+pub mod context;
+pub mod search;
+pub mod task;
+pub mod tool;
+pub mod vector_db;
+
+pub use kalosm_language_model;
+pub use kalosm_llama;
+pub use kalosm_sample;
+pub use rbert;
+pub use rphi;
+
+/// A prelude of commonly used items in kalosm-language
+pub mod prelude {
+    pub use crate::chat::*;
+    pub use crate::context::*;
+    pub use crate::task::*;
+    pub use crate::tool::*;
+    pub use crate::vector_db::*;
+    pub use futures_util::StreamExt as _;
+    pub use kalosm_language_model::*;
+    pub use kalosm_llama::{Llama, LlamaBuilder, LlamaSession, LlamaSource};
+    pub use kalosm_sample::*;
+    pub use kalosm_streams::text_stream::*;
+    pub use rbert::{Bert, BertBuilder, BertSource, BertSpace};
+    pub use rphi::{Phi, PhiBuilder, PhiSource};
+}

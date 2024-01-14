@@ -1,10 +1,8 @@
-use futures_util::stream::StreamExt;
-use kalosm_language::*;
-use std::io::Write;
+use kalosm::language::*;
 
 #[tokio::main]
 async fn main() {
-    let llm = Phi::start().await;
+    let llm = Llama::default();
     let prompt = "Five US states in central US are ";
 
     println!("# with constraints");
@@ -66,27 +64,29 @@ async fn main() {
         .map(LiteralParser::from)
         .collect::<Vec<_>>();
 
-    let states = IndexParser::new(states_parser);
+    let index_parser = IndexParser::new(states_parser);
 
-    let validator = states
+    let validator = index_parser
         .then(LiteralParser::from(", "))
         .repeat(5..=5)
         .then(LiteralParser::from("\n"));
-    let mut words = llm.stream_structured_text(prompt, validator).await.unwrap();
+    let stream = llm.stream_structured_text(prompt, validator).await.unwrap();
 
-    while let Some(text) = words.next().await {
-        print!("{}", text);
-        std::io::stdout().flush().unwrap();
-    }
-
-    println!("{:#?}", words.result().await);
+    println!(
+        "{:#?}",
+        stream
+            .result()
+            .await
+            .unwrap()
+            .0
+            .iter()
+            .map(|x| states[x.0 .0])
+            .collect::<Vec<_>>()
+    );
 
     println!("\n\n# without constraints");
     print!("{}", prompt);
 
-    let mut words = llm.stream_text(prompt).with_max_length(100).await.unwrap();
-    while let Some(text) = words.next().await {
-        print!("{}", text);
-        std::io::stdout().flush().unwrap();
-    }
+    let stream = llm.stream_text(prompt).with_max_length(100).await.unwrap();
+    stream.to_std_out().await.unwrap();
 }

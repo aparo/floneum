@@ -38,18 +38,17 @@ mod raw;
 mod session;
 mod source;
 
+pub use crate::model::LlamaModel;
 use crate::raw::Model;
 pub use crate::session::LlamaSession;
-use kalosm_language_model::ChatModel;
-use llm_samplers::types::Sampler;
-use session::LlamaCache;
-pub use source::*;
-
 use candle_core::{
     quantized::{ggml_file, gguf_file},
     Device,
 };
-use model::LlamaModel;
+use kalosm_language_model::ChatMarkers;
+use llm_samplers::types::Sampler;
+use session::LlamaCache;
+pub use source::*;
 use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 
@@ -84,33 +83,7 @@ pub struct Llama {
     task_sender: tokio::sync::mpsc::UnboundedSender<Task>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
     tokenizer: Arc<Tokenizer>,
-    chat_markers: ChatMarkers,
-}
-
-impl ChatModel for Llama {
-    fn assistant_marker(&self) -> &str {
-        self.chat_markers.assistant_marker.unwrap_or("")
-    }
-
-    fn end_assistant_marker(&self) -> &str {
-        self.chat_markers.end_assistant_marker.unwrap_or("")
-    }
-
-    fn user_marker(&self) -> &str {
-        self.chat_markers.user_marker.unwrap_or("")
-    }
-
-    fn end_user_marker(&self) -> &str {
-        self.chat_markers.end_user_marker.unwrap_or("")
-    }
-
-    fn system_prompt_marker(&self) -> &str {
-        self.chat_markers.system_prompt_marker.unwrap_or("")
-    }
-
-    fn end_system_prompt_marker(&self) -> &str {
-        self.chat_markers.end_system_marker.unwrap_or("")
-    }
+    chat_markers: Option<ChatMarkers>,
 }
 
 impl Drop for Llama {
@@ -151,36 +124,39 @@ impl Llama {
         tokenizer: Tokenizer,
         device: Device,
         cache: LlamaCache,
-        chat_markers: ChatMarkers,
+        chat_markers: Option<ChatMarkers>,
     ) -> Self {
         let (task_sender, mut task_receiver) = tokio::sync::mpsc::unbounded_channel();
-        let arc_tokenizer = Arc::new(tokenizer.clone());
+        let arc_tokenizer = Arc::new(tokenizer);
 
-        let thread_handle = std::thread::spawn(move || {
-            let mut inner = LlamaModel::new(model, tokenizer, device, cache);
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(async move {
-                    while let Some(task) = task_receiver.recv().await {
-                        match task {
-                            Task::Kill => break,
-                            Task::Infer {
-                                settings,
-                                sender,
-                                sampler,
-                            } => {
-                                if let Err(err) = inner._infer(settings, sampler, sender) {
-                                    eprintln!("Error: {}", err);
+        let thread_handle = std::thread::spawn({
+            let arc_tokenizer = arc_tokenizer.clone();
+            move || {
+                let mut inner = LlamaModel::new(model, arc_tokenizer, device, cache);
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(async move {
+                        while let Some(task) = task_receiver.recv().await {
+                            match task {
+                                Task::Kill => break,
+                                Task::Infer {
+                                    settings,
+                                    sender,
+                                    sampler,
+                                } => {
+                                    if let Err(err) = inner._infer(settings, sampler, sender) {
+                                        eprintln!("Error: {}", err);
+                                    }
+                                }
+                                Task::RunSync { callback } => {
+                                    callback(&mut inner).await;
                                 }
                             }
-                            Task::RunSync { callback } => {
-                                callback(&mut inner).await;
-                            }
                         }
-                    }
-                })
+                    })
+            }
         });
         Self {
             task_sender,
