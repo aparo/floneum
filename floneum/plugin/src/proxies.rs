@@ -98,6 +98,7 @@ impl PartialEq for PrimitiveValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (PrimitiveValue::Number(a), PrimitiveValue::Number(b)) => a == b,
+            (PrimitiveValue::Float(a), PrimitiveValue::Float(b)) => a == b,
             (PrimitiveValue::Text(a), PrimitiveValue::Text(b)) => a == b,
             (PrimitiveValue::File(a), PrimitiveValue::File(b)) => a == b,
             (PrimitiveValue::Folder(a), PrimitiveValue::Folder(b)) => a == b,
@@ -119,6 +120,7 @@ impl PartialEq for PrimitiveValue {
 #[derive(serde::Serialize, serde::Deserialize)]
 enum MyPrimitiveValue {
     Number(i64),
+    Float(f64),
     Text(String),
     File(String),
     Folder(String),
@@ -137,6 +139,7 @@ impl From<&PrimitiveValue> for MyPrimitiveValue {
     fn from(value: &PrimitiveValue) -> Self {
         match value {
             PrimitiveValue::Number(value) => MyPrimitiveValue::Number(*value),
+            PrimitiveValue::Float(value) => MyPrimitiveValue::Float(*value),
             PrimitiveValue::Text(value) => MyPrimitiveValue::Text(value.clone()),
             PrimitiveValue::File(value) => MyPrimitiveValue::File(value.clone()),
             PrimitiveValue::Folder(value) => MyPrimitiveValue::Folder(value.clone()),
@@ -159,6 +162,7 @@ impl From<MyPrimitiveValue> for PrimitiveValue {
     fn from(value: MyPrimitiveValue) -> Self {
         match value {
             MyPrimitiveValue::Number(value) => PrimitiveValue::Number(value),
+            MyPrimitiveValue::Float(value) => PrimitiveValue::Float(value),
             MyPrimitiveValue::Text(value) => PrimitiveValue::Text(value),
             MyPrimitiveValue::File(value) => PrimitiveValue::File(value),
             MyPrimitiveValue::Folder(value) => PrimitiveValue::Folder(value),
@@ -183,18 +187,12 @@ impl From<MyPrimitiveValue> for PrimitiveValue {
 
 #[derive(Serialize, Deserialize)]
 enum MyEmbeddingModelType {
-    Mpt(MyMptType),
-    GptNeoX(MyGptNeoXType),
-    Llama(MyLlamaType),
     Bert,
 }
 
 impl From<&EmbeddingModelType> for MyEmbeddingModelType {
     fn from(value: &EmbeddingModelType) -> Self {
         match value {
-            EmbeddingModelType::Mpt(value) => MyEmbeddingModelType::Mpt(value.into()),
-            EmbeddingModelType::GptNeoX(value) => MyEmbeddingModelType::GptNeoX(value.into()),
-            EmbeddingModelType::Llama(value) => MyEmbeddingModelType::Llama(value.into()),
             EmbeddingModelType::Bert => MyEmbeddingModelType::Bert,
         }
     }
@@ -203,9 +201,6 @@ impl From<&EmbeddingModelType> for MyEmbeddingModelType {
 impl From<MyEmbeddingModelType> for EmbeddingModelType {
     fn from(value: MyEmbeddingModelType) -> Self {
         match value {
-            MyEmbeddingModelType::Mpt(value) => EmbeddingModelType::Mpt(value.into()),
-            MyEmbeddingModelType::GptNeoX(value) => EmbeddingModelType::GptNeoX(value.into()),
-            MyEmbeddingModelType::Llama(value) => EmbeddingModelType::Llama(value.into()),
             MyEmbeddingModelType::Bert => EmbeddingModelType::Bert,
         }
     }
@@ -213,32 +208,70 @@ impl From<MyEmbeddingModelType> for EmbeddingModelType {
 
 impl PartialEq for EmbeddingModelType {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (EmbeddingModelType::Mpt(a), EmbeddingModelType::Mpt(b)) => a == b,
-            (EmbeddingModelType::GptNeoX(a), EmbeddingModelType::GptNeoX(b)) => a == b,
-            (EmbeddingModelType::Llama(a), EmbeddingModelType::Llama(b)) => a == b,
-            _ => false,
-        }
+        matches!(
+            (self, other),
+            (EmbeddingModelType::Bert, EmbeddingModelType::Bert)
+        )
     }
 }
 
 #[derive(Serialize, Deserialize)]
 enum MyModelType {
-    Mpt(MyMptType),
-    GptNeoX(MyGptNeoXType),
-    Llama(MyLlamaType),
-    Phi,
-    Mistral,
+    MistralSeven,
+    MistralSevenInstruct,
+    MistralSevenInstructTwo,
+    ZephyrSevenAlpha,
+    ZephyrSevenBeta,
+    OpenChatSeven,
+    StarlingSevenAlpha,
+    TinyLlamaChat,
+    TinyLlama,
+    LlamaSeven,
+    LlamaThirteen,
+    LlamaSeventy,
+    LlamaSevenChat,
+    LlamaThirteenChat,
+    LlamaSeventyChat,
+    LlamaSevenCode,
+    LlamaThirteenCode,
+    LlamaThirtyFourCode,
+    SolarTen,
+    SolarTenInstruct,
+    PhiOne,
+    PhiOnePointFive,
+    PhiTwo,
+    PuffinPhiTwo,
+    DolphinPhiTwo,
 }
 
 impl From<&ModelType> for MyModelType {
     fn from(value: &ModelType) -> Self {
         match value {
-            ModelType::Mpt(value) => MyModelType::Mpt(value.into()),
-            ModelType::GptNeoX(value) => MyModelType::GptNeoX(value.into()),
-            ModelType::Llama(value) => MyModelType::Llama(value.into()),
-            ModelType::Phi => MyModelType::Phi,
-            ModelType::Mistral => MyModelType::Mistral,
+            main::types::ModelType::MistralSeven => MyModelType::MistralSeven,
+            main::types::ModelType::MistralSevenInstruct => MyModelType::MistralSevenInstruct,
+            main::types::ModelType::MistralSevenInstructTwo => MyModelType::MistralSevenInstructTwo,
+            main::types::ModelType::ZephyrSevenAlpha => MyModelType::ZephyrSevenAlpha,
+            main::types::ModelType::ZephyrSevenBeta => MyModelType::ZephyrSevenBeta,
+            main::types::ModelType::OpenChatSeven => MyModelType::OpenChatSeven,
+            main::types::ModelType::StarlingSevenAlpha => MyModelType::StarlingSevenAlpha,
+            main::types::ModelType::TinyLlamaChat => MyModelType::TinyLlamaChat,
+            main::types::ModelType::TinyLlama => MyModelType::TinyLlama,
+            main::types::ModelType::LlamaSeven => MyModelType::LlamaSeven,
+            main::types::ModelType::LlamaThirteen => MyModelType::LlamaThirteen,
+            main::types::ModelType::LlamaSeventy => MyModelType::LlamaSeventy,
+            main::types::ModelType::LlamaSevenChat => MyModelType::LlamaSevenChat,
+            main::types::ModelType::LlamaThirteenChat => MyModelType::LlamaThirteenChat,
+            main::types::ModelType::LlamaSeventyChat => MyModelType::LlamaSeventyChat,
+            main::types::ModelType::LlamaSevenCode => MyModelType::LlamaSevenCode,
+            main::types::ModelType::LlamaThirteenCode => MyModelType::LlamaThirteenCode,
+            main::types::ModelType::LlamaThirtyFourCode => MyModelType::LlamaThirtyFourCode,
+            main::types::ModelType::SolarTen => MyModelType::SolarTen,
+            main::types::ModelType::SolarTenInstruct => MyModelType::SolarTenInstruct,
+            main::types::ModelType::PhiOne => MyModelType::PhiOne,
+            main::types::ModelType::PhiOnePointFive => MyModelType::PhiOnePointFive,
+            main::types::ModelType::PhiTwo => MyModelType::PhiTwo,
+            main::types::ModelType::PuffinPhiTwo => MyModelType::PuffinPhiTwo,
+            main::types::ModelType::DolphinPhiTwo => MyModelType::DolphinPhiTwo,
         }
     }
 }
@@ -246,119 +279,116 @@ impl From<&ModelType> for MyModelType {
 impl From<MyModelType> for ModelType {
     fn from(value: MyModelType) -> Self {
         match value {
-            MyModelType::Mpt(value) => ModelType::Mpt(value.into()),
-            MyModelType::GptNeoX(value) => ModelType::GptNeoX(value.into()),
-            MyModelType::Llama(value) => ModelType::Llama(value.into()),
-            MyModelType::Phi => ModelType::Phi,
-            MyModelType::Mistral => ModelType::Mistral,
+            MyModelType::MistralSeven => main::types::ModelType::MistralSeven,
+            MyModelType::MistralSevenInstruct => main::types::ModelType::MistralSevenInstruct,
+            MyModelType::MistralSevenInstructTwo => main::types::ModelType::MistralSevenInstructTwo,
+            MyModelType::ZephyrSevenAlpha => main::types::ModelType::ZephyrSevenAlpha,
+            MyModelType::ZephyrSevenBeta => main::types::ModelType::ZephyrSevenBeta,
+            MyModelType::OpenChatSeven => main::types::ModelType::OpenChatSeven,
+            MyModelType::StarlingSevenAlpha => main::types::ModelType::StarlingSevenAlpha,
+            MyModelType::TinyLlamaChat => main::types::ModelType::TinyLlamaChat,
+            MyModelType::TinyLlama => main::types::ModelType::TinyLlama,
+            MyModelType::LlamaSeven => main::types::ModelType::LlamaSeven,
+            MyModelType::LlamaThirteen => main::types::ModelType::LlamaThirteen,
+            MyModelType::LlamaSeventy => main::types::ModelType::LlamaSeventy,
+            MyModelType::LlamaSevenChat => main::types::ModelType::LlamaSevenChat,
+            MyModelType::LlamaThirteenChat => main::types::ModelType::LlamaThirteenChat,
+            MyModelType::LlamaSeventyChat => main::types::ModelType::LlamaSeventyChat,
+            MyModelType::LlamaSevenCode => main::types::ModelType::LlamaSevenCode,
+            MyModelType::LlamaThirteenCode => main::types::ModelType::LlamaThirteenCode,
+            MyModelType::LlamaThirtyFourCode => main::types::ModelType::LlamaThirtyFourCode,
+            MyModelType::SolarTen => main::types::ModelType::SolarTen,
+            MyModelType::SolarTenInstruct => main::types::ModelType::SolarTenInstruct,
+            MyModelType::PhiOne => main::types::ModelType::PhiOne,
+            MyModelType::PhiOnePointFive => main::types::ModelType::PhiOnePointFive,
+            MyModelType::PhiTwo => main::types::ModelType::PhiTwo,
+            MyModelType::PuffinPhiTwo => main::types::ModelType::PuffinPhiTwo,
+            MyModelType::DolphinPhiTwo => main::types::ModelType::DolphinPhiTwo,
         }
     }
 }
 
 impl PartialEq for ModelType {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (ModelType::Mpt(a), ModelType::Mpt(b)) => a == b,
-            (ModelType::GptNeoX(a), ModelType::GptNeoX(b)) => a == b,
-            (ModelType::Llama(a), ModelType::Llama(b)) => a == b,
-            _ => false,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-enum MyMptType {
-    Base,
-    Story,
-    Instruct,
-    Chat,
-}
-
-impl From<&MptType> for MyMptType {
-    fn from(value: &MptType) -> Self {
-        match value {
-            MptType::Base => MyMptType::Base,
-            MptType::Story => MyMptType::Story,
-            MptType::Instruct => MyMptType::Instruct,
-            MptType::Chat => MyMptType::Chat,
-        }
-    }
-}
-
-impl From<MyMptType> for MptType {
-    fn from(value: MyMptType) -> Self {
-        match value {
-            MyMptType::Base => MptType::Base,
-            MyMptType::Story => MptType::Story,
-            MyMptType::Instruct => MptType::Instruct,
-            MyMptType::Chat => MptType::Chat,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-enum MyGptNeoXType {
-    LargePythia,
-    TinyPythia,
-    DollySevenB,
-    Stablelm,
-}
-
-impl From<&GptNeoXType> for MyGptNeoXType {
-    fn from(value: &GptNeoXType) -> Self {
-        match value {
-            GptNeoXType::LargePythia => MyGptNeoXType::LargePythia,
-            GptNeoXType::TinyPythia => MyGptNeoXType::TinyPythia,
-            GptNeoXType::DollySevenB => MyGptNeoXType::DollySevenB,
-            GptNeoXType::Stablelm => MyGptNeoXType::Stablelm,
-        }
-    }
-}
-
-impl From<MyGptNeoXType> for GptNeoXType {
-    fn from(value: MyGptNeoXType) -> Self {
-        match value {
-            MyGptNeoXType::LargePythia => GptNeoXType::LargePythia,
-            MyGptNeoXType::TinyPythia => GptNeoXType::TinyPythia,
-            MyGptNeoXType::DollySevenB => GptNeoXType::DollySevenB,
-            MyGptNeoXType::Stablelm => GptNeoXType::Stablelm,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-enum MyLlamaType {
-    Vicuna,
-    Guanaco,
-    Wizardlm,
-    Orca,
-    LlamaSevenChat,
-    LlamaThirteenChat,
-}
-
-impl From<&LlamaType> for MyLlamaType {
-    fn from(value: &LlamaType) -> Self {
-        match value {
-            LlamaType::Vicuna => MyLlamaType::Vicuna,
-            LlamaType::Guanaco => MyLlamaType::Guanaco,
-            LlamaType::Wizardlm => MyLlamaType::Wizardlm,
-            LlamaType::Orca => MyLlamaType::Orca,
-            LlamaType::LlamaSevenChat => MyLlamaType::LlamaSevenChat,
-            LlamaType::LlamaThirteenChat => MyLlamaType::LlamaThirteenChat,
-        }
-    }
-}
-
-impl From<MyLlamaType> for LlamaType {
-    fn from(value: MyLlamaType) -> Self {
-        match value {
-            MyLlamaType::Vicuna => LlamaType::Vicuna,
-            MyLlamaType::Guanaco => LlamaType::Guanaco,
-            MyLlamaType::Wizardlm => LlamaType::Wizardlm,
-            MyLlamaType::Orca => LlamaType::Orca,
-            MyLlamaType::LlamaSevenChat => LlamaType::LlamaSevenChat,
-            MyLlamaType::LlamaThirteenChat => LlamaType::LlamaThirteenChat,
-        }
+        matches!(
+            (self, other),
+            (
+                main::types::ModelType::MistralSeven,
+                main::types::ModelType::MistralSeven
+            ) | (
+                main::types::ModelType::MistralSevenInstruct,
+                main::types::ModelType::MistralSevenInstruct
+            ) | (
+                main::types::ModelType::MistralSevenInstructTwo,
+                main::types::ModelType::MistralSevenInstructTwo
+            ) | (
+                main::types::ModelType::ZephyrSevenAlpha,
+                main::types::ModelType::ZephyrSevenAlpha
+            ) | (
+                main::types::ModelType::ZephyrSevenBeta,
+                main::types::ModelType::ZephyrSevenBeta
+            ) | (
+                main::types::ModelType::OpenChatSeven,
+                main::types::ModelType::OpenChatSeven
+            ) | (
+                main::types::ModelType::StarlingSevenAlpha,
+                main::types::ModelType::StarlingSevenAlpha
+            ) | (
+                main::types::ModelType::TinyLlamaChat,
+                main::types::ModelType::TinyLlamaChat
+            ) | (
+                main::types::ModelType::TinyLlama,
+                main::types::ModelType::TinyLlama
+            ) | (
+                main::types::ModelType::LlamaSeven,
+                main::types::ModelType::LlamaSeven
+            ) | (
+                main::types::ModelType::LlamaThirteen,
+                main::types::ModelType::LlamaThirteen
+            ) | (
+                main::types::ModelType::LlamaSeventy,
+                main::types::ModelType::LlamaSeventy
+            ) | (
+                main::types::ModelType::LlamaSevenChat,
+                main::types::ModelType::LlamaSevenChat
+            ) | (
+                main::types::ModelType::LlamaThirteenChat,
+                main::types::ModelType::LlamaThirteenChat
+            ) | (
+                main::types::ModelType::LlamaSeventyChat,
+                main::types::ModelType::LlamaSeventyChat
+            ) | (
+                main::types::ModelType::LlamaSevenCode,
+                main::types::ModelType::LlamaSevenCode
+            ) | (
+                main::types::ModelType::LlamaThirteenCode,
+                main::types::ModelType::LlamaThirteenCode
+            ) | (
+                main::types::ModelType::LlamaThirtyFourCode,
+                main::types::ModelType::LlamaThirtyFourCode
+            ) | (
+                main::types::ModelType::SolarTen,
+                main::types::ModelType::SolarTen
+            ) | (
+                main::types::ModelType::SolarTenInstruct,
+                main::types::ModelType::SolarTenInstruct
+            ) | (
+                main::types::ModelType::PhiOne,
+                main::types::ModelType::PhiOne
+            ) | (
+                main::types::ModelType::PhiOnePointFive,
+                main::types::ModelType::PhiOnePointFive
+            ) | (
+                main::types::ModelType::PhiTwo,
+                main::types::ModelType::PhiTwo
+            ) | (
+                main::types::ModelType::PuffinPhiTwo,
+                main::types::ModelType::PuffinPhiTwo
+            ) | (
+                main::types::ModelType::DolphinPhiTwo,
+                main::types::ModelType::DolphinPhiTwo
+            )
+        )
     }
 }
 
@@ -401,6 +431,7 @@ impl PrimitiveValueType {
     pub fn create(&self) -> PrimitiveValue {
         match self {
             PrimitiveValueType::Number => PrimitiveValue::Number(0),
+            PrimitiveValueType::Float => PrimitiveValue::Float(0.),
             PrimitiveValueType::Text => PrimitiveValue::Text("".to_string()),
             PrimitiveValueType::File => PrimitiveValue::File("".to_string()),
             PrimitiveValueType::Folder => PrimitiveValue::Folder("".to_string()),
@@ -412,12 +443,10 @@ impl PrimitiveValueType {
             PrimitiveValueType::EmbeddingModel => {
                 PrimitiveValue::EmbeddingModel(Resource::new_own(0))
             }
-            PrimitiveValueType::ModelType => {
-                PrimitiveValue::ModelType(ModelType::Llama(LlamaType::LlamaSevenChat))
+            PrimitiveValueType::ModelType => PrimitiveValue::ModelType(ModelType::LlamaSevenChat),
+            PrimitiveValueType::EmbeddingModelType => {
+                PrimitiveValue::EmbeddingModelType(EmbeddingModelType::Bert)
             }
-            PrimitiveValueType::EmbeddingModelType => PrimitiveValue::EmbeddingModelType(
-                EmbeddingModelType::Llama(LlamaType::LlamaSevenChat),
-            ),
             PrimitiveValueType::Boolean => PrimitiveValue::Boolean(false),
             PrimitiveValueType::Page => PrimitiveValue::Page(Resource::new_own(0)),
             PrimitiveValueType::Node => PrimitiveValue::Node(Resource::new_own(0)),
@@ -429,6 +458,7 @@ impl PrimitiveValueType {
         matches!(
             (self, other),
             (PrimitiveValueType::Number, PrimitiveValueType::Number)
+                | (PrimitiveValueType::Float, PrimitiveValueType::Float)
                 | (PrimitiveValueType::Text, PrimitiveValueType::Text)
                 | (PrimitiveValueType::File, PrimitiveValueType::File)
                 | (PrimitiveValueType::Folder, PrimitiveValueType::Folder)
@@ -532,6 +562,7 @@ impl<'de> Deserialize<'de> for ValueType {
 #[derive(Serialize, Deserialize)]
 enum MyPrimitiveValueType {
     Number,
+    Float,
     Text,
     File,
     Folder,
@@ -551,6 +582,7 @@ impl From<PrimitiveValueType> for MyPrimitiveValueType {
     fn from(value: PrimitiveValueType) -> Self {
         match value {
             PrimitiveValueType::Number => MyPrimitiveValueType::Number,
+            PrimitiveValueType::Float => MyPrimitiveValueType::Float,
             PrimitiveValueType::Text => MyPrimitiveValueType::Text,
             PrimitiveValueType::File => MyPrimitiveValueType::File,
             PrimitiveValueType::Folder => MyPrimitiveValueType::Folder,
@@ -572,6 +604,7 @@ impl From<MyPrimitiveValueType> for PrimitiveValueType {
     fn from(value: MyPrimitiveValueType) -> Self {
         match value {
             MyPrimitiveValueType::Number => PrimitiveValueType::Number,
+            MyPrimitiveValueType::Float => PrimitiveValueType::Float,
             MyPrimitiveValueType::Text => PrimitiveValueType::Text,
             MyPrimitiveValueType::File => PrimitiveValueType::File,
             MyPrimitiveValueType::Folder => PrimitiveValueType::Folder,
@@ -614,6 +647,7 @@ impl PrimitiveValue {
         matches!(
             (self, ty),
             (PrimitiveValue::Number(_), PrimitiveValueType::Number)
+                | (PrimitiveValue::Float(_), PrimitiveValueType::Float)
                 | (PrimitiveValue::Text(_), PrimitiveValueType::Text)
                 | (PrimitiveValue::Embedding(_), PrimitiveValueType::Embedding)
                 | (PrimitiveValue::Database(_), PrimitiveValueType::Database)
@@ -695,6 +729,7 @@ impl Clone for PrimitiveValue {
     fn clone(&self) -> Self {
         match self {
             PrimitiveValue::Number(value) => PrimitiveValue::Number(*value),
+            PrimitiveValue::Float(value) => PrimitiveValue::Float(*value),
             PrimitiveValue::Text(value) => PrimitiveValue::Text(value.clone()),
             PrimitiveValue::File(value) => PrimitiveValue::File(value.clone()),
             PrimitiveValue::Folder(value) => PrimitiveValue::Folder(value.clone()),

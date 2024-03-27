@@ -8,11 +8,22 @@ use kalosm_llama::{prelude::*, LlamaModel};
 criterion_group!(mbenches, generation);
 criterion_main!(mbenches);
 
+fn create_model_sync() -> LlamaModel {
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async move {
+            LlamaModel::from_builder(
+                Llama::builder().with_source(LlamaSource::mistral_7b()),
+                |_| {},
+            )
+            .await
+            .unwrap()
+        })
+}
+
 fn generation(c: &mut Criterion) {
     c.bench_function("feed text short", |b| {
-        let model =
-            LlamaModel::from_builder(Llama::builder().with_source(LlamaSource::mistral_7b()))
-                .unwrap();
+        let model = create_model_sync();
         let prompt = "Hello world";
 
         b.iter(|| {
@@ -21,10 +32,20 @@ fn generation(c: &mut Criterion) {
         })
     });
 
+    c.bench_function("feed text repeated", |b| {
+        let model = create_model_sync();
+        let prompt = "Hello world";
+
+        b.iter(|| {
+            let mut session = model.new_session().unwrap();
+            for _ in 0..5 {
+                model.feed_text(&mut session, prompt, Some(0)).unwrap();
+            }
+        })
+    });
+
     c.bench_function("feed text long", |b| {
-        let model =
-            LlamaModel::from_builder(Llama::builder().with_source(LlamaSource::mistral_7b()))
-                .unwrap();
+        let model = create_model_sync();
         let prompt = "Hello world".repeat(10);
 
         b.iter(|| {
@@ -34,9 +55,7 @@ fn generation(c: &mut Criterion) {
     });
 
     c.bench_function("generate text", |b| {
-        let model =
-            LlamaModel::from_builder(Llama::builder().with_source(LlamaSource::mistral_7b()))
-                .unwrap();
+        let model = create_model_sync();
         let prompt = "Hello world";
 
         b.iter(|| {

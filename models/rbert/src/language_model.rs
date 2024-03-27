@@ -1,27 +1,36 @@
 pub use crate::Bert;
+use crate::BertBuilder;
+use kalosm_common::*;
 use kalosm_language_model::Embedding;
 use kalosm_language_model::VectorSpace;
-use kalosm_language_model::{CreateModel, Embedder};
+use kalosm_language_model::{Embedder, ModelBuilder};
 
 #[async_trait::async_trait]
-impl CreateModel for Bert {
-    async fn start() -> Self {
-        Self::default()
+impl ModelBuilder for BertBuilder {
+    type Model = Bert;
+
+    async fn start_with_loading_handler(
+        self,
+        loading_handler: impl FnMut(ModelLoadingProgress) + Send + 'static,
+    ) -> anyhow::Result<Self::Model> {
+        self.build_with_loading_handler(loading_handler).await
     }
 
-    fn requires_download() -> bool {
+    fn requires_download(&self) -> bool {
         true
     }
 }
 
 #[async_trait::async_trait]
-impl Embedder<BertSpace> for Bert {
-    async fn embed(&mut self, input: &str) -> anyhow::Result<Embedding<BertSpace>> {
+impl Embedder for Bert {
+    type VectorSpace = BertSpace;
+
+    async fn embed(&self, input: &str) -> anyhow::Result<Embedding<BertSpace>> {
         let tensor = self.embed_batch_raw(&[input])?.pop().unwrap();
         Ok(Embedding::new(tensor))
     }
 
-    async fn embed_batch(&mut self, inputs: &[&str]) -> anyhow::Result<Vec<Embedding<BertSpace>>> {
+    async fn embed_batch(&self, inputs: &[&str]) -> anyhow::Result<Vec<Embedding<BertSpace>>> {
         let tensors = self.embed_batch_raw(inputs)?;
 
         let mut embeddings = Vec::with_capacity(tensors.len());

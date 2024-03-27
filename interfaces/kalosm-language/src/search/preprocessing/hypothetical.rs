@@ -1,9 +1,8 @@
-use kalosm_language_model::{Embedder, Model, StructureParserResult, SyncModel, VectorSpace};
+use kalosm_language_model::{Embedder, Model, SyncModel};
 use kalosm_sample::{LiteralParser, ParserExt, StopOn};
-use kalosm_streams::text_stream::ChannelTextStream;
 
 use crate::{
-    prelude::{Document, IndexParser, Task},
+    prelude::{Document, IndexParser, StructuredRunner, Task},
     search::Chunk,
 };
 
@@ -12,13 +11,7 @@ use super::{ChunkStrategy, Chunker};
 const TASK_DESCRIPTION: &str =
     "You generate hypothetical questions that may be answered by the given text. The questions restate any information necessary to understand the question";
 
-const EXAMPLES: [(&str, &str); 5] = [
-    ("For instance, while the chat GPT interface provides a straightforward entry point, it quickly becomes challenging to create structured workflows. Imagine wanting to search through files to find specific ones, such as all .txt files related to travel, and then upload them. With Floneum, you can achieve this seamlessly within a structured workflow, eliminating the need for manual interaction with external tools.", "What are the tradeoffs of using chat GPT?"),
-    ("On the other end of the spectrum, tools like Langchain offer extensive workflow customization but come with more system requirements and potential security concerns. Langchain requires users to install tools like Python and CUDA, making it less accessible to non-developers. In addition to this, building workflows in Python code can be impractical for individuals without programming expertise. Finally, plugins in Langchain are not sandboxed, which can expose users to malware or security risks when incorporating third-party libraries.", "What are the tradeoffs of using Langchain?"),
-    ("Floneum is a single executable that runs models locally, eliminating the need for complex installations. The heart of Floneum is its graph-based editor, designed to enable users without programming knowledge to build and manage their AI workflows seamlessly.", "What is Floneum?"), 
-    ("Embeddings are a way to understand the meaning of text. They provide a representation of the meaning of the words used. It lets us focus on the meaning of the text instead of the specific wording of the text.", "What is an embedding?"), 
-    ("While traditional databases rely on a fixed schema, NoSQL databases like MongoDB offer a flexible structure, allowing you to store and retrieve data in a more dynamic way. This flexibility is particularly beneficial for applications with evolving data requirements.", "How does MongoDB differ from traditional databases?")
-];
+const EXAMPLES: [(&str, &str); 2] = [("A content delivery network or a CDN optimizes the distribution of web content by strategically placing servers worldwide. This reduces latency, accelerates content delivery, and enhances the overall user experience.", "What role does a content delivery network play in web performance?"), ("The Internet of Things or IoT connects everyday devices to the internet, enabling them to send and receive data. This connectivity enhances automation and allows for more efficient monitoring and control of various systems.", "What is the purpose of the Internet of Things?")];
 
 const QUESTION_STARTERS: [&str; 9] = [
     "Who", "What", "When", "Where", "Why", "How", "Which", "Whom", "Whose",
@@ -26,7 +19,7 @@ const QUESTION_STARTERS: [&str; 9] = [
 
 const PREFIX: &str = "Questions that are answered by the previous text: ";
 
-fn create_constraints() -> kalosm_sample::SequenceParser<
+type Constraints = kalosm_sample::SequenceParser<
     LiteralParser<&'static str>,
     kalosm_sample::RepeatParser<
         kalosm_sample::SequenceParser<
@@ -39,7 +32,9 @@ fn create_constraints() -> kalosm_sample::SequenceParser<
             StopOn<&'static str>,
         >,
     >,
-> {
+>;
+
+fn create_constraints() -> Constraints {
     LiteralParser::new(PREFIX).then(
         IndexParser::new(
             QUESTION_STARTERS
@@ -56,22 +51,13 @@ fn create_constraints() -> kalosm_sample::SequenceParser<
 }
 
 /// A builder for a hypothetical chunker.
-pub struct HypotheticalBuilder<'a, M>
-where
-    M: Model,
-    <M::SyncModel as SyncModel>::Session: Send,
-{
-    model: &'a mut M,
+pub struct HypotheticalBuilder {
     task_description: Option<String>,
     examples: Option<Vec<(String, String)>>,
     chunking: Option<ChunkStrategy>,
 }
 
-impl<'a, M> HypotheticalBuilder<'a, M>
-where
-    M: Model,
-    <M::SyncModel as SyncModel>::Session: Send,
-{
+impl HypotheticalBuilder {
     /// Set the chunking strategy.
     pub fn with_chunking(mut self, chunking: ChunkStrategy) -> Self {
         self.chunking = Some(chunking);
@@ -82,7 +68,7 @@ where
     pub fn with_examples<S: Into<String>>(
         mut self,
         examples: impl IntoIterator<Item = (S, S)>,
-    ) -> HypotheticalBuilder<'a, M> {
+    ) -> Self {
         self.examples = Some(
             examples
                 .into_iter()
@@ -106,13 +92,13 @@ where
         let examples = self.examples.unwrap_or_else(|| {
             EXAMPLES
                 .iter()
-                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .map(|(a, b)| (a.to_string(), { PREFIX.to_string() + b }))
                 .collect::<Vec<_>>()
         });
         let chunking = self.chunking;
 
-        let task = Task::builder(self.model, task_description)
-            .with_constraints(create_constraints)
+        let task = Task::builder(task_description)
+            .with_constraints(create_constraints())
             .with_examples(examples)
             .build();
 
@@ -120,21 +106,16 @@ where
     }
 }
 
-/// Generates embeddings of questions
+/// Generates questions for a document.
 pub struct Hypothetical {
     chunking: Option<ChunkStrategy>,
-    task: Task<StructureParserResult<ChannelTextStream<String>, ((), Vec<((usize, ()), String)>)>>,
+    task: Task<StructuredRunner<Constraints>>,
 }
 
 impl Hypothetical {
-    /// Create a new hypothetical chunker.
-    pub fn builder<M>(model: &mut M) -> HypotheticalBuilder<M>
-    where
-        M: Model,
-        <M::SyncModel as SyncModel>::Session: Send,
-    {
+    /// Create a new hypothetical generator.
+    pub fn builder() -> HypotheticalBuilder {
         HypotheticalBuilder {
-            model,
             task_description: None,
             examples: None,
             chunking: None,
@@ -142,8 +123,12 @@ impl Hypothetical {
     }
 
     /// Generate a list of hypothetical questions about the given text.
-    pub async fn generate_question(&self, text: &str) -> anyhow::Result<Vec<String>> {
-        let questions = self.task.run(text).await?.result().await?;
+    pub async fn generate_question<M>(&self, text: &str, model: &M) -> anyhow::Result<Vec<String>>
+    where
+        M: Model,
+        <M::SyncModel as SyncModel>::Session: Sync + Send,
+    {
+        let questions = self.task.run(text, model).result().await?;
         let documents = questions
             .1
             .into_iter()
@@ -152,19 +137,45 @@ impl Hypothetical {
 
         Ok(documents)
     }
+
+    /// Turn this hypothetical generator into a chunker.
+    pub fn chunker<'a, M>(&'a self, model: &'a M) -> HypotheticalChunker<'a, M>
+    where
+        M: Model,
+        <M::SyncModel as SyncModel>::Session: Sync + Send,
+    {
+        HypotheticalChunker {
+            hypothetical: self,
+            model,
+        }
+    }
+}
+
+/// A hypothetical chunker.
+pub struct HypotheticalChunker<'a, M: Model>
+where
+    <M::SyncModel as SyncModel>::Session: Sync + Send,
+{
+    hypothetical: &'a Hypothetical,
+    model: &'a M,
 }
 
 #[async_trait::async_trait]
-impl<S: VectorSpace + Send + Sync + 'static> Chunker<S> for Hypothetical {
-    async fn chunk<E: Embedder<S> + Send>(
+impl<'a, M> Chunker for HypotheticalChunker<'a, M>
+where
+    M: Model,
+    <M::SyncModel as SyncModel>::Session: Sync + Send,
+{
+    async fn chunk<E: Embedder + Send>(
         &self,
         document: &Document,
-        embedder: &mut E,
-    ) -> anyhow::Result<Vec<Chunk<S>>> {
+        embedder: &E,
+    ) -> anyhow::Result<Vec<Chunk<E::VectorSpace>>> {
         let body = document.body();
 
         #[allow(clippy::single_range_in_vec_init)]
         let byte_chunks = self
+            .hypothetical
             .chunking
             .map(|chunking| chunking.chunk_str(body))
             .unwrap_or_else(|| vec![0..body.len()]);
@@ -177,7 +188,10 @@ impl<S: VectorSpace + Send + Sync + 'static> Chunker<S> for Hypothetical {
         let mut questions_count = Vec::new();
         for byte_chunk in &byte_chunks {
             let text = &body[byte_chunk.clone()];
-            let mut chunk_questions = self.generate_question(text).await?;
+            let mut chunk_questions = self
+                .hypothetical
+                .generate_question(text, self.model)
+                .await?;
             questions.append(&mut chunk_questions);
             questions_count.push(chunk_questions.len());
         }

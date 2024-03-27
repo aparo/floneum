@@ -1,4 +1,4 @@
-use candle_core::Device;
+use kalosm_common::accelerated_device_if_available;
 use kalosm_language_model::Embedder;
 use kalosm_learning::{
     Class, Classifier, ClassifierConfig, TextClassifier, TextClassifierDatasetBuilder,
@@ -13,9 +13,9 @@ enum MyClass {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut bert = Bert::builder().build()?;
+    let mut bert = Bert::builder().build().await?;
 
-    let dev = Device::cuda_if_available(0)?;
+    let dev = accelerated_device_if_available()?;
     let person_questions = vec![
         "What is the author's name?",
         "What is the author's age?",
@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "What is the most spoken language in the United States?",
     ];
 
-    let mut dataset = TextClassifierDatasetBuilder::<MyClass, _, _>::new(&mut bert);
+    let mut dataset = TextClassifierDatasetBuilder::<MyClass, _>::new(&mut bert);
 
     for question in &person_questions {
         dataset.add(question, MyClass::Person).await?;
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dataset = dataset.build(&dev)?;
 
     let mut classifier;
-    let layers = vec![10, 20, 10];
+    let layers = vec![3, 3, 3];
 
     loop {
         classifier = TextClassifier::<MyClass, BertSpace>::new(Classifier::new(

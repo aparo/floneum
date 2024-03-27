@@ -137,7 +137,10 @@ impl FloneumPackageIndex {
         let instance = &*OCTOCRAB;
         let page = instance
             .search()
-            .repositories("topic:floneum")
+            .repositories(&format!(
+                "topic:floneum-v{}",
+                crate::CURRENT_BINDING_VERSION
+            ))
             .sort("stars")
             .order("desc")
             .send()
@@ -205,7 +208,7 @@ impl FloneumPackageIndex {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct RepoId {
     pub owner: String,
     pub name: String,
@@ -263,7 +266,7 @@ impl RepoId {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Remote {
     last_fetched: u64,
     sha: String,
@@ -306,7 +309,7 @@ impl Remote {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct PackageIndexEntry {
     path: std::path::PathBuf,
     meta: Option<PackageStructure>,

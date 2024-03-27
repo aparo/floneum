@@ -208,7 +208,7 @@ Question: {question}
     ) -> Option<
         IndexParser<
             SequenceParser<LiteralParser<String>, ArcParser>,
-            Either<LiteralMismatchError, Arc<anyhow::Error>>,
+            Either<LiteralMismatchError, Arc<dyn Error + Send + Sync>>,
             (
                 (),
                 Arc<(dyn std::any::Any + std::marker::Send + std::marker::Sync + 'static)>,
@@ -231,12 +231,11 @@ Question: {question}
     /// Get the constraints for the thought action
     pub fn thought_constraints(
         &self,
-    ) -> impl Parser<
+    ) -> impl CreateParserState<
         Error = Either<LiteralMismatchError, OneLineError>,
         Output = ((), String),
         PartialState = SequenceParserState<LiteralParserOffset, OneLineState, ()>,
-    > + CreateParserState
-           + Send
+    > + Send
            + Sync
            + 'static {
         let constraints = "Thought: ";
@@ -250,7 +249,7 @@ Question: {question}
         LiteralParser<&'static str>,
         IndexParser<
             SequenceParser<LiteralParser<String>, ArcParser>,
-            Either<LiteralMismatchError, Arc<anyhow::Error>>,
+            Either<LiteralMismatchError, Arc<dyn Error + Send + Sync>>,
             ((), Arc<dyn Any + Send + Sync>),
             SequenceParserState<LiteralParserOffset, Arc<dyn Any + Send + Sync>, ()>,
         >,
@@ -262,12 +261,11 @@ Question: {question}
     /// Get the constraints for the answer action
     pub fn answer_constraints(
         &self,
-    ) -> impl Parser<
+    ) -> impl CreateParserState<
         Error = Either<LiteralMismatchError, OneLineError>,
         Output = ((), String),
         PartialState = SequenceParserState<LiteralParserOffset, OneLineState, ()>,
-    > + CreateParserState
-           + Send
+    > + Send
            + Sync
            + 'static {
         let constraints = LiteralParser::from("Final Answer: ");
@@ -291,7 +289,7 @@ Question: {question}
                 LiteralParser<&'static str>,
                 IndexParser<
                     SequenceParser<LiteralParser<String>, ArcParser>,
-                    Either<LiteralMismatchError, Arc<anyhow::Error>>,
+                    Either<LiteralMismatchError, Arc<dyn Error + Send + Sync>>,
                     ((), Arc<dyn Any + Send + Sync>),
                     SequenceParserState<LiteralParserOffset, Arc<dyn Any + Send + Sync>, ()>,
                 >,

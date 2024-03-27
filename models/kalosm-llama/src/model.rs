@@ -1,8 +1,7 @@
-use crate::{
-    raw::Model,
-    session::{LlamaCache, LlamaSession},
-};
+use crate::raw::cache::LlamaCache;
+use crate::{raw::Model, session::LlamaSession};
 use anyhow::{Error as E, Result};
+use kalosm_common::*;
 use kalosm_language_model::SyncModelExt;
 use llm_samplers::prelude::Logits;
 use std::sync::Arc;
@@ -15,6 +14,7 @@ use kalosm_language_model::SyncModel;
 use tokenizers::Tokenizer;
 
 use crate::InferenceSettings;
+use kalosm_common::accelerated_device_if_available;
 
 /// The inner, synchronous Llama model.
 pub struct LlamaModel {
@@ -28,12 +28,8 @@ impl SyncModel for LlamaModel {
     type Session = LlamaSession;
 
     fn new_session(&self) -> anyhow::Result<Self::Session> {
-        let mut cache = self.cache.clone();
-        cache.clear();
-        Ok(Self::Session {
-            cache,
-            current_tokens: Vec::new(),
-        })
+        let cache = self.cache.clone();
+        Ok(Self::Session { cache })
     }
 
     fn feed_text(
@@ -53,43 +49,13 @@ impl SyncModel for LlamaModel {
         tokens: &[u32],
         top_k: Option<usize>,
     ) -> anyhow::Result<Logits> {
-        let first_token = session.current_tokens.is_empty();
-
-        if first_token {
-            session.current_tokens.extend(tokens);
-            Self::forward(
-                &self.model,
-                &self.device,
-                &session.current_tokens,
-                0,
-                Some(&mut session.cache),
-                top_k,
-            )
-        } else {
-            for tid in tokens.iter().copied().take(tokens.len() - 1) {
-                let seq_len_offset = session.current_tokens.len();
-                session.current_tokens.push(tid);
-                Self::forward(
-                    &self.model,
-                    &self.device,
-                    &[tid],
-                    seq_len_offset,
-                    Some(&mut session.cache),
-                    Some(0),
-                )?;
-            }
-            let tid = *tokens.last().unwrap();
-            let seq_len_offset = session.current_tokens.len();
-            session.current_tokens.push(tid);
-            Self::forward(
-                &self.model,
-                &self.device,
-                &[tid],
-                seq_len_offset,
-                Some(&mut session.cache),
-                top_k,
-            )
-        }
+        Self::forward(
+            &self.model,
+            &self.device,
+            tokens,
+            Some(&mut session.cache),
+            top_k,
+        )
     }
 
     fn stop_token(&self) -> anyhow::Result<u32> {
@@ -110,7 +76,6 @@ impl LlamaModel {
         model: &Model,
         device: &Device,
         tokens: &[u32],
-        seqlen_offset: usize,
         cache: Option<&mut LlamaCache>,
         top_k: Option<usize>,
     ) -> anyhow::Result<Logits> {
@@ -118,13 +83,13 @@ impl LlamaModel {
             return Err(anyhow::anyhow!("Cannot run model on empty input"));
         }
 
-        let logits = model.forward(tokens, device, seqlen_offset, cache)?;
+        let logits = model.forward(tokens, device, cache)?;
 
         if top_k == Some(0) {
             return Ok(Logits::default());
         }
 
-        let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
+        let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
         let logits: Vec<f32> = logits.to_vec1()?;
         match top_k {
             Some(top_k) => Ok(Logits::try_from_iter_top_k(logits, top_k)?),
@@ -133,25 +98,44 @@ impl LlamaModel {
     }
 
     /// Create a new sync Llama model from a builder.
-    pub fn from_builder(builder: crate::LlamaBuilder) -> anyhow::Result<Self> {
-        let tokenizer = builder.source.tokenizer()?;
+    pub async fn from_builder(
+        builder: crate::LlamaBuilder,
+        mut handler: impl FnMut(ModelLoadingProgress) + Send + Sync + 'static,
+    ) -> anyhow::Result<Self> {
+        let tokenizer = builder
+            .source
+            .tokenizer(|progress| {
+                handler(ModelLoadingProgress::Downloading {
+                    source: format!("Tokenizer ({})", builder.source.tokenizer),
+                    progress,
+                })
+            })
+            .await?;
 
-        let device = Device::cuda_if_available(0)?;
-        let filename = builder.source.model()?;
+        let device = accelerated_device_if_available()?;
+        let filename = builder
+            .source
+            .model(|progress| {
+                handler(ModelLoadingProgress::Downloading {
+                    source: format!("Model ({})", builder.source.tokenizer),
+                    progress,
+                })
+            })
+            .await?;
         let mut file = std::fs::File::open(&filename)?;
         let model = match filename.extension().and_then(|v| v.to_str()) {
             Some("gguf") => {
                 let model = gguf_file::Content::read(&mut file)?;
-                Model::from_gguf(model, &mut file)?
+                Model::from_gguf(model, &mut file, &device)?
             }
             Some("ggml" | "bin") | Some(_) | None => {
-                let model = ggml_file::Content::read(&mut file)?;
+                let model = ggml_file::Content::read(&mut file, &device)?;
                 let gqa = builder.source.group_query_attention;
-                Model::from_ggml(model, gqa as usize)?
+                Model::from_ggml(model, gqa as usize, &device)?
             }
         };
 
-        let cache = LlamaCache::new(&model);
+        let cache = LlamaCache::new(model.config.n_layer);
         Ok(Self {
             model,
             tokenizer: Arc::new(tokenizer),

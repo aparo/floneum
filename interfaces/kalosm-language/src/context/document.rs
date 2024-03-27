@@ -2,7 +2,7 @@ use url::Url;
 pub use whatlang::Lang;
 
 /// A document is a piece of text with a title.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Document {
     title: String,
     body: String,
@@ -59,6 +59,12 @@ impl Document {
     }
 }
 
+impl std::fmt::Display for Document {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}\n{}", self.title, self.body)
+    }
+}
+
 /// A trait for types that can be converted into a document.
 #[async_trait::async_trait]
 pub trait IntoDocument {
@@ -70,6 +76,13 @@ pub trait IntoDocument {
 impl IntoDocument for String {
     async fn into_document(self) -> anyhow::Result<Document> {
         Ok(Document::from_parts("", self))
+    }
+}
+
+#[async_trait::async_trait]
+impl IntoDocument for &String {
+    async fn into_document(self) -> anyhow::Result<Document> {
+        Ok(Document::from_parts("", self.to_string()))
     }
 }
 

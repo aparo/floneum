@@ -6,7 +6,6 @@ mod llm;
 mod node;
 mod page;
 mod proxies;
-mod structure;
 
 pub struct Both {
     interface0: exports::plugins::main::definitions::Definitions,

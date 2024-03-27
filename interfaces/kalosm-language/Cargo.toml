@@ -1,11 +1,12 @@
 [package]
 name = "kalosm-language"
-version = "0.1.1"
+version = "0.2.2"
 edition = "2021"
 description = "A set of pretrained language models "
 license = "MIT/Apache-2.0"
 repository = "https://github.com/floneum/floneum"
 authors = ["Evan Almloff"]
+keywords = ["ai", "llm", "llama", "mistral", "nlp"]
 
 [dependencies]
 bytesize = "1.2.0"
@@ -17,7 +18,7 @@ reqwest = { version = "0.11.18", features = ["stream", "json"] }
 spinoff = "0.7.0"
 tokio = { version = "1.28.1", features = ["full"] }
 slab = { version = "0.4.8", features = ["serde"] }
-arroy = "0.1.0"
+arroy = "0.2.0"
 heed = "0.20.0-alpha.9"
 serde = { version = "1.0.163", features = ["derive"] }
 partial_sort = "0.2.0"
@@ -29,7 +30,7 @@ tracing = "0.1.37"
 num_cpus = "1.16.0"
 async-trait = "0.1.73"
 serde_json = "1.0.107"
-chrono = "0.4.31"
+chrono = { version = "0.4.31", features = ["serde"] }
 readability = { version = "0.2.0", default_features = false }
 tantivy = "0.21.0"
 tempfile = "3.8.0"
@@ -66,5 +67,6 @@ half = "2.3.1"
 
 [features]
 llamacpp = ["kalosm-language-model/llamacpp", "kalosm-sample/llamacpp"]
-metal = ["kalosm-language-model/metal", "rphi/accelerate", "rbert/accelerate", "kalosm-llama/accelerate"]
-cublas = ["kalosm-language-model/cublas", "rbert/cuda", "rbert/cudnn", "rphi/cuda", "rphi/cudnn", "kalosm-llama/cuda", "kalosm-llama/cudnn"]
+metal = ["rphi/metal", "rbert/metal", "kalosm-llama/metal"]
+cublas = ["rbert/cuda", "rbert/cudnn", "rphi/cuda", "rphi/cudnn", "kalosm-llama/cuda", "kalosm-llama/cudnn"]
+mkl = ["rphi/mkl", "rbert/mkl", "kalosm-llama/mkl"]

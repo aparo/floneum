@@ -3,7 +3,9 @@ use crate::structured::generate_structured;
 use crate::TokenOutputStream;
 use crate::UnknownVectorSpace;
 use futures_util::{Stream, StreamExt};
+use kalosm_common::*;
 use kalosm_sample::{Parser, Tokenizer};
+use kalosm_streams::text_stream::ChannelTextStream;
 use llm_samplers::configure::SamplerChainBuilder;
 use llm_samplers::prelude::*;
 use llm_samplers::types::Logits;
@@ -11,7 +13,6 @@ use std::any::Any;
 use std::fmt::Display;
 use std::future::IntoFuture;
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -43,12 +44,18 @@ use url::Url;
 /// }
 /// ```
 #[async_trait::async_trait]
-pub trait Embedder<S: VectorSpace + Send + Sync + 'static>: Send + Sync + 'static {
+pub trait Embedder: Send + Sync + 'static {
+    /// The vector space that this embedder uses.
+    type VectorSpace: VectorSpace + Send + Sync + 'static;
+
     /// Embed a single string.
-    async fn embed(&mut self, input: &str) -> anyhow::Result<Embedding<S>>;
+    async fn embed(&self, input: &str) -> anyhow::Result<Embedding<Self::VectorSpace>>;
 
     /// Embed a batch of strings.
-    async fn embed_batch(&mut self, inputs: &[&str]) -> anyhow::Result<Vec<Embedding<S>>> {
+    async fn embed_batch(
+        &self,
+        inputs: &[&str],
+    ) -> anyhow::Result<Vec<Embedding<Self::VectorSpace>>> {
         let mut embeddings = Vec::with_capacity(inputs.len());
         for input in inputs {
             embeddings.push(self.embed(input).await?);
@@ -61,28 +68,25 @@ pub trait Embedder<S: VectorSpace + Send + Sync + 'static>: Send + Sync + 'stati
     where
         Self: Sized,
     {
-        Box::new(AnyEmbedder::<S, Self>(self, PhantomData))
+        Box::new(AnyEmbedder::<Self>(self))
     }
 }
 
 /// A trait object for an embedder.
-pub type DynEmbedder = Box<dyn Embedder<UnknownVectorSpace>>;
+pub type DynEmbedder = Box<dyn Embedder<VectorSpace = UnknownVectorSpace>>;
 
-struct AnyEmbedder<S: VectorSpace + Send + Sync + 'static, E: Embedder<S> + Send + Sync + 'static>(
-    E,
-    PhantomData<S>,
-);
+struct AnyEmbedder<E: Embedder + Send + Sync + 'static>(E);
 
 #[async_trait::async_trait]
-impl<S: VectorSpace + Send + Sync + 'static, E: Embedder<S> + Send + Sync + 'static>
-    Embedder<UnknownVectorSpace> for AnyEmbedder<S, E>
-{
-    async fn embed(&mut self, input: &str) -> anyhow::Result<Embedding<UnknownVectorSpace>> {
+impl<E: Embedder + Send + Sync + 'static> Embedder for AnyEmbedder<E> {
+    type VectorSpace = UnknownVectorSpace;
+
+    async fn embed(&self, input: &str) -> anyhow::Result<Embedding<UnknownVectorSpace>> {
         self.0.embed(input).await.map(|e| e.cast())
     }
 
     async fn embed_batch(
-        &mut self,
+        &self,
         inputs: &[&str],
     ) -> anyhow::Result<Vec<Embedding<UnknownVectorSpace>>> {
         self.0
@@ -92,7 +96,7 @@ impl<S: VectorSpace + Send + Sync + 'static, E: Embedder<S> + Send + Sync + 'sta
     }
 }
 
-/// A model that can be created asynchronously.
+/// A builder that can create a model asynchronously.
 ///
 /// # Example
 /// ```rust, no_run
@@ -105,12 +109,28 @@ impl<S: VectorSpace + Send + Sync + 'static, E: Embedder<S> + Send + Sync + 'sta
 /// }
 /// ```
 #[async_trait::async_trait]
-pub trait CreateModel {
+pub trait ModelBuilder {
+    /// The model that this trait creates.
+    type Model;
+
     /// Start the model.
-    async fn start() -> Self;
+    async fn start(self) -> anyhow::Result<Self::Model>
+    where
+        Self: Sized,
+    {
+        self.start_with_loading_handler(|_| {}).await
+    }
+
+    /// Start the model with a loading handler.
+    async fn start_with_loading_handler(
+        self,
+        handler: impl FnMut(ModelLoadingProgress) + Send + Sync + 'static,
+    ) -> anyhow::Result<Self::Model>
+    where
+        Self: Sized;
 
     /// Check if the model will need to be downloaded before use (default: false)
-    fn requires_download() -> bool {
+    fn requires_download(&self) -> bool {
         false
     }
 }
@@ -392,6 +412,7 @@ pub trait ModelExt: Model + Send + Sync + 'static {
     /// # Example
     /// ```rust, no_run
     /// use rphi::prelude::*;
+    /// use kalosm_language_model::Model;
     ///
     /// #[tokio::main]
     /// async fn main() {
@@ -407,12 +428,11 @@ pub trait ModelExt: Model + Send + Sync + 'static {
     ///             let mut session = llm.new_session().unwrap();
     ///
     ///             // Feed the question into the model
-    ///             let mut logits = llm.feed_text(&mut session, question).unwrap();
+    ///             let mut logits = llm.feed_text(&mut session, question, None).unwrap();
     ///
     ///             println!("logits: {:?}", logits);
     ///         })
     ///     })
-    ///     .await
     ///     .unwrap();
     /// }
     /// ```
@@ -437,7 +457,7 @@ pub trait ModelExt: Model + Send + Sync + 'static {
         Self::TextStream: From<tokio::sync::mpsc::UnboundedReceiver<String>>,
         P: kalosm_sample::CreateParserState + Parser + Send + 'static,
         P::PartialState: Send + 'static,
-        P::Output: Send + 'static,
+        P::Output: Clone + Send + 'static,
     {
         let sampler = Arc::new(Mutex::new(GenerationParameters::default().sampler()));
         let parser_state = parser.create_parser_state();
@@ -457,7 +477,7 @@ pub trait ModelExt: Model + Send + Sync + 'static {
         Self::TextStream: From<tokio::sync::mpsc::UnboundedReceiver<String>>,
         P: Parser + Send + 'static,
         P::PartialState: Send + 'static,
-        P::Output: Send + 'static,
+        P::Output: Clone + Send + 'static,
     {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         let (result_sender, result_receiver) = tokio::sync::oneshot::channel();
@@ -499,22 +519,6 @@ pub struct StructureParserResult<S: Stream<Item = String> + Send + Unpin + 'stat
     result: tokio::sync::oneshot::Receiver<anyhow::Result<O>>,
 }
 
-impl<S: Stream<Item = String> + Send + Unpin + 'static, O> Deref for StructureParserResult<S, O> {
-    type Target = S;
-
-    fn deref(&self) -> &Self::Target {
-        &self.stream
-    }
-}
-
-impl<S: Stream<Item = String> + Send + Unpin + 'static, O> DerefMut
-    for StructureParserResult<S, O>
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.stream
-    }
-}
-
 impl<S: Stream<Item = String> + Send + Unpin + 'static, O> StructureParserResult<S, O> {
     /// Create a new structured parser result from a stream and a result.
     pub fn new(stream: S, result: tokio::sync::oneshot::Receiver<anyhow::Result<O>>) -> Self {
@@ -526,9 +530,31 @@ impl<S: Stream<Item = String> + Send + Unpin + 'static, O> StructureParserResult
         self.result.await.unwrap()
     }
 
+    /// Get all the text from the stream.
+    pub async fn text(self) -> String {
+        let mut text = String::new();
+        let mut stream = self.stream;
+        while let Some(new) = stream.next().await {
+            text.push_str(&new);
+        }
+        text
+    }
+
     /// Split the stream into a token stream and a result.
     pub fn split(self) -> (S, tokio::sync::oneshot::Receiver<anyhow::Result<O>>) {
         (self.stream, self.result)
+    }
+}
+
+impl<S: Stream<Item = String> + Send + Unpin + 'static, O> Stream for StructureParserResult<S, O> {
+    type Item = String;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        this.stream.poll_next_unpin(cx)
     }
 }
 
@@ -539,6 +565,7 @@ impl<M: Model + Send + Sync + 'static> ModelExt for M {}
 /// # Example
 /// ```rust, no_run
 /// use rphi::prelude::*;
+/// use kalosm_language_model::Model;
 ///
 /// #[tokio::main]
 /// async fn main() {
@@ -554,12 +581,11 @@ impl<M: Model + Send + Sync + 'static> ModelExt for M {}
 ///             let mut session = llm.new_session().unwrap();
 ///
 ///             // Feed the question into the model
-///             let mut logits = llm.feed_text(&mut session, question).unwrap();
+///             let mut logits = llm.feed_text(&mut session, question, None).unwrap();
 ///
 ///             println!("logits: {:?}", logits);
 ///         })
 ///     })
-///     .await
 ///     .unwrap();
 /// }
 /// ```
@@ -638,13 +664,23 @@ pub trait SyncModelExt: SyncModel {
         parser_state: P::PartialState,
         sampler: Arc<Mutex<dyn Sampler>>,
         on_token: impl FnMut(String) -> anyhow::Result<()>,
-    ) -> anyhow::Result<P::Output> {
+    ) -> anyhow::Result<P::Output>
+    where
+        P::Output: Clone,
+    {
+        let tokenizer = self.tokenizer();
+        let stop_token = self
+            .stop_token()
+            .ok()
+            .and_then(|token_id| tokenizer.decode(&[token_id]).ok())
+            .map(|s| s.to_string())
+            .unwrap_or("<|endoftext|>".to_string());
         generate_structured(
             prompt,
             self,
             session,
-            &self.tokenizer(),
-            self.stop_token().ok(),
+            &tokenizer,
+            stop_token,
             parser,
             parser_state,
             sampler,
@@ -663,7 +699,7 @@ pub trait SyncModelExt: SyncModel {
         mut sampler: Arc<Mutex<dyn Sampler>>,
         mut on_token: impl FnMut(String) -> anyhow::Result<ModelFeedback>,
     ) -> anyhow::Result<()> {
-        let tokens = self.tokenizer().encode(prompt)?;
+        let tokens = self.tokenizer().encode(prompt, true)?;
         let mut text_stream = TokenOutputStream::new(self.tokenizer(), tokens.clone());
 
         let mut logits = self.feed_tokens(session, &tokens, Some(512))?;
@@ -677,6 +713,7 @@ pub trait SyncModelExt: SyncModel {
         'generate: loop {
             let new_token = text_stream.sample_token(&mut sampler, logits, stop_on)?;
             if new_token == stop_token {
+                tracing::trace!("Stopping on stop token");
                 break;
             }
             if let Some(mut new_text) = text_stream.next_token(new_token)? {
@@ -890,18 +927,25 @@ pub trait Model: Send + Sync + 'static {
     fn chat_markers(&self) -> Option<ChatMarkers> {
         None
     }
+}
 
+/// An extension trait for models that can be converted into a trait object.
+pub trait AnyModelExt:
+    Model<TextStream = ChannelTextStream<String>> + Send + Sync + 'static
+{
     /// Convert this model into a model trait object.
     fn into_any_model(self) -> DynModel
     where
         Self: Send + Sync + Sized,
     {
-        Box::new(AnyModel(self, PhantomData))
+        Box::new(AnyModel(self))
     }
 }
 
+impl<M: Model<TextStream = ChannelTextStream<String>> + Send + Sync + 'static> AnyModelExt for M {}
+
 /// The chat markers to use for the model.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct ChatMarkers {
     /// The marker to use before user input.
     pub user_marker: &'static str,
@@ -918,23 +962,17 @@ pub struct ChatMarkers {
 }
 
 /// A trait object for a model.
-pub type DynModel = Box<
-    dyn Model<
-            TextStream = Box<dyn Stream<Item = String> + Send + Sync + Unpin>,
-            SyncModel = BoxedSyncModel,
-        > + Send,
->;
+pub type DynModel =
+    Box<dyn Model<TextStream = ChannelTextStream<String>, SyncModel = BoxedSyncModel> + Send>;
 
 #[async_trait::async_trait]
 impl Model for DynModel {
-    type TextStream = Box<dyn Stream<Item = String> + Send + Sync + Unpin>;
+    type TextStream = ChannelTextStream<String>;
     type SyncModel = BoxedSyncModel;
 
     fn tokenizer(&self) -> Arc<dyn Tokenizer + Send + Sync> {
-        let self_ref: &(dyn Model<
-            TextStream = Box<dyn Stream<Item = String> + Send + Sync + Unpin>,
-            SyncModel = BoxedSyncModel,
-        > + Send) = self.as_ref();
+        let self_ref: &(dyn Model<TextStream = ChannelTextStream<String>, SyncModel = BoxedSyncModel>
+              + Send) = self.as_ref();
         self_ref.tokenizer()
     }
 
@@ -943,10 +981,8 @@ impl Model for DynModel {
         prompt: &str,
         parameters: GenerationParameters,
     ) -> anyhow::Result<Self::TextStream> {
-        let self_ref: &(dyn Model<
-            TextStream = Box<dyn Stream<Item = String> + Send + Sync + Unpin>,
-            SyncModel = BoxedSyncModel,
-        > + Send) = self.as_ref();
+        let self_ref: &(dyn Model<TextStream = ChannelTextStream<String>, SyncModel = BoxedSyncModel>
+              + Send) = self.as_ref();
         self_ref.stream_text_inner(prompt, parameters).await
     }
 }
@@ -1089,18 +1125,14 @@ impl<M: SyncModel<Session = S>, S: Session + Any> SyncModel for AnySyncModel<M, 
     }
 }
 
-struct AnyModel<M: Model<TextStream = S>, S: Stream<Item = String> + Send + Sync + Unpin + 'static>(
-    M,
-    PhantomData<S>,
-);
+struct AnyModel<M>(M);
 
 #[async_trait::async_trait]
-impl<M, S> Model for AnyModel<M, S>
+impl<M> Model for AnyModel<M>
 where
-    S: Stream<Item = String> + Send + Sync + Unpin + 'static,
-    M: Model<TextStream = S> + Send + Sync,
+    M: Model<TextStream = ChannelTextStream<String>> + Send + Sync,
 {
-    type TextStream = Box<dyn Stream<Item = String> + Send + Sync + Unpin>;
+    type TextStream = ChannelTextStream<String>;
     type SyncModel = BoxedSyncModel;
 
     fn tokenizer(&self) -> Arc<dyn Tokenizer + Send + Sync> {
@@ -1112,10 +1144,7 @@ where
         prompt: &str,
         params: GenerationParameters,
     ) -> anyhow::Result<Self::TextStream> {
-        self.0
-            .stream_text_inner(prompt, params)
-            .await
-            .map(|s| Box::new(s) as Box<dyn Stream<Item = String> + Send + Sync + Unpin>)
+        self.0.stream_text_inner(prompt, params).await
     }
 
     async fn stream_text_with_sampler(
@@ -1128,7 +1157,6 @@ where
         self.0
             .stream_text_with_sampler(prompt, max_tokens, stop_on, sampler)
             .await
-            .map(|s| Box::new(s) as Box<dyn Stream<Item = String> + Send + Sync + Unpin>)
     }
 }
 

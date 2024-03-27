@@ -2,7 +2,7 @@ use kalosm::language::*;
 
 #[tokio::main]
 async fn main() {
-    let llm = Llama::default();
+    let llm = Llama::new().await.unwrap();
     let prompt = "Five US states in central US are ";
 
     println!("# with constraints");
@@ -66,19 +66,21 @@ async fn main() {
 
     let index_parser = IndexParser::new(states_parser);
 
-    let validator = index_parser
-        .then(LiteralParser::from(", "))
-        .repeat(5..=5)
-        .then(LiteralParser::from("\n"));
-    let stream = llm.stream_structured_text(prompt, validator).await.unwrap();
+    let validator = index_parser.then(LiteralParser::from(", ")).repeat(1..=5);
+    let (stream, result) = llm
+        .stream_structured_text(prompt, validator)
+        .await
+        .unwrap()
+        .split();
+
+    stream.to_std_out().await.unwrap();
 
     println!(
-        "{:#?}",
-        stream
-            .result()
+        "\n{:#?}",
+        result
             .await
             .unwrap()
-            .0
+            .unwrap()
             .iter()
             .map(|x| states[x.0 .0])
             .collect::<Vec<_>>()

@@ -36,6 +36,8 @@ mod model;
 mod raw;
 mod source;
 
+use kalosm_common::accelerated_device_if_available;
+use kalosm_common::ModelLoadingProgress;
 pub use kalosm_language_model;
 use kalosm_language_model::ChatMarkers;
 use raw::PhiCache;
@@ -52,7 +54,6 @@ use anyhow::Error as E;
 use crate::raw::Config;
 use crate::raw::MixFormerSequentialForCausalLM as QMixFormer;
 use candle_core::Device;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use llm_samplers::prelude::Sampler;
 use model::PhiModel;
 use std::sync::Arc;
@@ -93,12 +94,6 @@ impl Drop for Phi {
     }
 }
 
-impl Default for Phi {
-    fn default() -> Self {
-        Phi::builder().build().unwrap()
-    }
-}
-
 impl Phi {
     /// Create a builder for a Phi model.
     pub fn builder() -> PhiBuilder {
@@ -106,13 +101,16 @@ impl Phi {
     }
 
     /// Start the v2 model.
-    pub fn v2() -> anyhow::Result<Self> {
-        Phi::builder().with_source(PhiSource::v2()).build()
+    pub async fn v2() -> anyhow::Result<Phi> {
+        Phi::builder().with_source(PhiSource::v2()).build().await
     }
 
-    /// Check if the model has been downloaded.
-    pub(crate) fn downloaded() -> bool {
-        false
+    /// Create a new chat model.
+    pub async fn new_chat() -> anyhow::Result<Phi> {
+        Phi::builder()
+            .with_source(PhiSource::dolphin_phi_v2())
+            .build()
+            .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -188,20 +186,11 @@ impl Phi {
 /// A builder with configuration for a Phi model.
 #[derive(Default)]
 pub struct PhiBuilder {
-    /// Run on CPU rather than on GPU.
-    cpu: bool,
-
     /// The source to use for the model.
     source: source::PhiSource,
 }
 
 impl PhiBuilder {
-    /// Set whether to run on CPU rather than on GPU.
-    pub fn with_cpu(mut self, cpu: bool) -> Self {
-        self.cpu = cpu;
-        self
-    }
-
     /// Set the source to use for the model.
     pub fn with_source(mut self, source: source::PhiSource) -> Self {
         self.source = source;
@@ -209,29 +198,44 @@ impl PhiBuilder {
     }
 
     /// Build the model (this will download the model if it is not already downloaded)
-    pub fn build(self) -> anyhow::Result<Phi> {
-        let api = Api::new()?;
-        let repo = api.repo(Repo::with_revision(
-            "microsoft/phi-1_5".to_string(),
-            RepoType::Model,
-            "refs/pr/18".to_string(),
-        ));
-        let tokenizer_filename = repo.get("tokenizer.json")?;
-        let filename = api
-            .model(self.source.model_id.clone())
-            .get(&self.source.model_file)?;
+    pub async fn build(self) -> anyhow::Result<Phi> {
+        self.build_with_loading_handler(|_| {}).await
+    }
+
+    /// Build the model with a handler for progress as the download and loading progresses.
+    pub async fn build_with_loading_handler(
+        self,
+        mut progress_handler: impl FnMut(ModelLoadingProgress) + Send + Sync + 'static,
+    ) -> anyhow::Result<Phi> {
+        let PhiSource {
+            tokenizer, model, ..
+        } = self.source;
+        let tokenizer_filename = tokenizer
+            .download(|progress| {
+                progress_handler(ModelLoadingProgress::downloading(
+                    format!("Tokenizer ({})", tokenizer),
+                    progress,
+                ))
+            })
+            .await?;
+        let filename = model
+            .download(|progress| {
+                progress_handler(ModelLoadingProgress::downloading(
+                    format!("Model ({})", model),
+                    progress,
+                ))
+            })
+            .await?;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
         let config = self.source.phi_config;
-        let (model, device) = {
-            let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename)?;
-            let model = if self.source.phi2 {
-                QMixFormer::new_v2(&config, vb)?
-            } else {
-                QMixFormer::new(&config, vb)?
-            };
-
-            (model, device(self.cpu)?)
+        let device = accelerated_device_if_available()?;
+        let vb =
+            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
+        let model = if self.source.phi2 {
+            QMixFormer::new_v2(&config, vb)?
+        } else {
+            QMixFormer::new(&config, vb)?
         };
 
         let cache = PhiCache::new(&config);
@@ -243,20 +247,6 @@ impl PhiBuilder {
             cache,
             self.source.chat_markers,
         ))
-    }
-}
-
-pub(crate) fn device(cpu: bool) -> anyhow::Result<Device> {
-    if cpu {
-        Ok(Device::Cpu)
-    } else {
-        let device = Device::cuda_if_available(0)?;
-        if !device.is_cuda() {
-            tracing::warn!(
-                "Running on CPU, to run on GPU, build this example with `--features cuda`"
-            );
-        }
-        Ok(device)
     }
 }
 

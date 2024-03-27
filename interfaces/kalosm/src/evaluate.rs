@@ -20,7 +20,6 @@ pub trait Metric<T> {
     async fn distance(&mut self, first: &T, other: &T) -> f64;
 }
 
-#[derive(Default)]
 /// A metric that uses the Bert model to compute the distance between two strings.
 pub struct BertDistance {
     bert: Bert,
@@ -244,7 +243,7 @@ impl<'a, I: Display> std::fmt::Display for EvaluationResult<'a, I> {
         writeln!(f, "{}", statistics)?;
 
         let mut table = Table::new();
-        table.set_header(vec!["Actual Output", "Expected Output", "Score"]);
+        table.set_header(vec!["Expected Output", "Actual Output", "Score"]);
 
         let bottom_third_of_metric =
             self.range.start() + (self.range.end() - self.range.start()) / 3.0;

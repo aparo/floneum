@@ -1,11 +1,12 @@
 [package]
 name = "kalosm-learning"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2021"
 description = "A simplified machine learning library for building off of pretrained models."
 license = "MIT/Apache-2.0"
 repository = "https://github.com/floneum/floneum"
 authors = ["Evan Almloff"]
+keywords = ["ai", "bert", "nlp", "machine-learning", "transformers"]
 
 [dependencies]
 kalosm-language-model.workspace = true
@@ -17,8 +18,10 @@ half = "2.3.1"
 rand = "0.8.5"
 anyhow = "1.0.75"
 tokio = { version = "1.34.0", features = ["full"] }
+kalosm-common.workspace = true
 
 [dev-dependencies]
 rbert.workspace = true
 
 [features]
+metal = ["candle-core/metal", "candle-nn/metal"]

@@ -15,9 +15,9 @@ async fn main() {
         Floneum is a single executable that runs models locally, eliminating the need for complex installations. The heart of Floneum is its graph-based editor, designed to enable users without programming knowledge to build and manage their AI workflows seamlessly.")
     ];
 
-    let mut llm = Llama::new_chat();
+    let llm = Llama::new_chat().await.unwrap();
 
-    let hypothetical = Hypothetical::builder(&mut llm)
+    let hypothetical = Hypothetical::builder()
         .with_chunking(kalosm_language::search::ChunkStrategy::Paragraph {
             paragraph_count: 1,
             overlap: 0,
@@ -25,9 +25,10 @@ async fn main() {
         .build()
         .unwrap();
 
-    let mut embedder = Bert::default();
+    let embedder = Bert::new().await.unwrap();
     let chunked = hypothetical
-        .chunk_batch(&documents, &mut embedder)
+        .chunker(&llm)
+        .chunk_batch(&documents, &embedder)
         .await
         .unwrap();
     println!("chunked: {:?}", chunked);
